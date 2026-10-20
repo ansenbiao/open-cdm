@@ -35,14 +35,7 @@
           </Button>
           <div class="operator-limit-input" v-if="isSupportLimit">
             <span class="operator-limit-label">{{ $t('xian-zhi-tiao-shu') }}</span>
-            <InputNumber
-              v-model="tab.maxRecordCount"
-              :min="1"
-              :max="1000000"
-              size="small"
-              :disabled="isRunning"
-              class="operator-limit-number"
-            />
+            <InputNumber v-model="tab.maxRecordCount" :min="1" :max="1000000" size="small" :disabled="isRunning" class="operator-limit-number" />
           </div>
           <slot name="assistant-control" />
         </div>
