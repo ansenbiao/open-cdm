@@ -33,6 +33,17 @@
               <span>{{ $t('ge-shi') }}</span>
             </div>
           </Button>
+          <div class="operator-limit-input" v-if="isSupportLimit">
+            <span class="operator-limit-label">{{ $t('xian-zhi-tiao-shu') }}</span>
+            <InputNumber
+              v-model="tab.maxRecordCount"
+              :min="1"
+              :max="1000000"
+              size="small"
+              :disabled="isRunning"
+              class="operator-limit-number"
+            />
+          </div>
           <slot name="assistant-control" />
         </div>
         <div class="operator-btn-group" v-if="isSupportTx || isSupportIsolation || isSupportReadOnly">
@@ -132,7 +143,7 @@ export default {
   },
   computed: {
     ...mapGetters(['isDesktop', 'supportRdbTx', 'isolations', 'isDark']),
-    ...mapState(['userInfo', 'globalSetting', 'socket']),
+    ...mapState(['userInfo', 'globalSetting', 'socket', 'dmGlobalSetting']),
     isSupportIsolation() {
       return this.tab.support.isolation.conf !== 'No';
     },
@@ -157,6 +168,9 @@ export default {
     isSupportFormat() {
       return canFormatSql(this.tab);
     },
+    isSupportLimit() {
+      return this.tab.support.cancel.conf !== 'No';
+    },
     isRunning() {
       return this.tab.stopping || this.tab.running || !this.socket.connected || !this.tab.connected;
     },
@@ -169,6 +183,9 @@ export default {
       handler(newVal, oldVal) {
         if (newVal !== oldVal) {
           this.handleSetInitTx();
+        }
+        if (newVal && this.tab.maxRecordCount == null) {
+          this.tab.maxRecordCount = this.dmGlobalSetting?.onlineMaxRecordCount || 1000;
         }
       },
       immediate: true,
@@ -274,6 +291,23 @@ export default {
   :deep(.ivu-checkbox-wrapper) {
     margin-right: 0;
     pointer-events: none;
+  }
+}
+
+.operator-limit-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+
+  .operator-limit-label {
+    font-size: 12px;
+    white-space: nowrap;
+    color: var(--text-color);
+  }
+
+  .operator-limit-number {
+    width: 90px;
   }
 }
 

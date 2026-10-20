@@ -346,6 +346,7 @@ public class DmHomeController {
         settings.setSqlFileMaxSize(this.userConfigService.sqlFileMaxSize());
         settings.setLanguageMaxRequestKiloByte(this.userConfigService.languageMaxRequestKiloByte());
         settings.setApprovalExplainMaxSize(this.userConfigService.approvalExplainMaxSize());
+        settings.setOnlineMaxRecordCount(this.userConfigService.onlineMaxRecordCount());
 
         return ResWebDataUtils.buildSuccess(settings);
     }

@@ -51,4 +51,6 @@ public interface UserConfigService {
     int sqlFileMaxSize();
 
     int approvalExplainMaxSize();
+
+    int onlineMaxRecordCount();
 }

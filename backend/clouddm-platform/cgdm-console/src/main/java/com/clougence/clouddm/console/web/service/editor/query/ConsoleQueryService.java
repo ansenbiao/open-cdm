@@ -315,6 +315,7 @@ public class ConsoleQueryService implements UnifiedPostConstruct, ConsoleQueryAp
             .dataSourceId(ctx.getLevels().dsDO().getId())
             .levels(ctx.getLevels().levelsParam())
             .parameters(parameters)
+            .maxRecordCount(queryDTO.getMaxRecordCount())
             .build();
         int codeLine = queryDTO.getBasicCodeLine();
         int codeColumn = queryDTO.getBasicCodeColumn();

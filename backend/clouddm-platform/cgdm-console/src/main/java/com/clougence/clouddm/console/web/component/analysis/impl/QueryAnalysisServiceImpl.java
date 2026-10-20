@@ -212,8 +212,12 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
                                 RootUserConfig.Fields.onlineMaxColumnMegaByte,   //
                                 RootUserConfig.Fields.onlineMaxElementMegaByte)  //
                         );
-                        ResultLimit limit = DmDsUtils.fetchResultLimit(configMap, Requester.CONSOLE);
-                        preparedRewriteFetchLimit = limit.getFetchRecordCountLimit();
+                        if (options.getMaxRecordCount() != null && options.getMaxRecordCount() > 0) {
+                            preparedRewriteFetchLimit = options.getMaxRecordCount();
+                        } else {
+                            ResultLimit limit = DmDsUtils.fetchResultLimit(configMap, Requester.CONSOLE);
+                            preparedRewriteFetchLimit = limit.getFetchRecordCountLimit();
+                        }
                     }
                 }
             }

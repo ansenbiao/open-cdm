@@ -43,6 +43,7 @@ public class WsQueryFO extends WsRequestFO {
     private RdbIsolation   rdbIsolation;
 
     private boolean        viewOriginData;
+    private Integer        maxRecordCount;
 
     @Override
     public String resultRequestId() {

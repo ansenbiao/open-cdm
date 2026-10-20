@@ -33,6 +33,7 @@ public final class AnalysisQueryOptions {
     private final long                      dsId;
     private final Map<UmiTypes, Object>     levels;
     private final SqlParserParameters       parameters;
+    private final Integer                   maxRecordCount;
 
     private AnalysisQueryOptions(Builder builder){
         this.skippedFeatures = Set.copyOf(builder.skippedFeatures);
@@ -40,6 +41,7 @@ public final class AnalysisQueryOptions {
         this.dsId = builder.dataSourceId;
         this.levels = builder.levels;
         this.parameters = builder.parameters;
+        this.maxRecordCount = builder.maxRecordCount;
     }
 
     public static AnalysisQueryOptions defaults() {
@@ -61,6 +63,7 @@ public final class AnalysisQueryOptions {
         private long                            dataSourceId;
         private Map<UmiTypes, Object>           levels;
         private SqlParserParameters             parameters      = SqlParserParameters.empty();
+        private Integer                         maxRecordCount;
 
         private Builder(){
         }
@@ -83,6 +86,11 @@ public final class AnalysisQueryOptions {
         /** Complete parameters prepared by the caller, including any session overrides; analysis does not fetch or merge them. */
         public Builder parameters(SqlParserParameters parameters) {
             this.parameters = parameters;
+            return this;
+        }
+
+        public Builder maxRecordCount(Integer maxRecordCount) {
+            this.maxRecordCount = maxRecordCount;
             return this;
         }
 

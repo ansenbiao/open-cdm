@@ -332,6 +332,11 @@ public class UserConfigServiceImpl implements UserConfigService {
     }
 
     @Override
+    public int onlineMaxRecordCount() {
+        return this.systemDal.fetchSystemConf(RootUserConfig.Fields.onlineMaxRecordCount, Integer.class, 1000);
+    }
+
+    @Override
     public void initSubAccountConfigs(String uid) {
         NormalUserConfig config = new NormalUserConfig();
         List<UserConfigKvDef> defs = collectConfigs(config, uid);

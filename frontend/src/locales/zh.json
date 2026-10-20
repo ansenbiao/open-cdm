@@ -1777,6 +1777,7 @@
   "zhong-duan-zhi-hang": "中断",
   "ge-shi-hua": "格式化",
   "ge-shi": "格式",
+  "xian-zhi-tiao-shu": "限制条数",
   "shou-dong-kai-qi-shi-wu-xu-shou-dong-ti-jiao-shi-wu": "手动：开启事务，需手动提交事务",
   "zi-dong-guan-bi-shi-wu-zhi-hang-de-sql-zi-dong-ti-jiao": "自动：关闭事务，执行的SQL自动提交",
   "shi-yong-mo-ren-de-shi-wu-ge-li-ji-bie": "使用默认的事务隔离级别",
