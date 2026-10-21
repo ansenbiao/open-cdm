@@ -266,7 +266,11 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
             }
             String beforeRewrite = request.getQueryBody();
             RewriteContext rewriteCtx = new RewriteContext();
-            rewriteCtx.setFetchLimit(this.rewriteFetchLimit);
+            if (DmDsUtils.hasExplicitLimit(beforeRewrite)) {
+                rewriteCtx.setFetchLimit(0);
+            } else {
+                rewriteCtx.setFetchLimit(this.rewriteFetchLimit);
+            }
             rewriteCtx.setParameters(this.parameters);
             String afterRewrite = this.rewriteSpi.rewriteLimit(request.getQueryId(), beforeRewrite, rewriteCtx);
 

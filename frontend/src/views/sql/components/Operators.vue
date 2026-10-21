@@ -162,7 +162,7 @@ export default {
       return canFormatSql(this.tab);
     },
     isSupportLimit() {
-      return this.tab.support.cancel.conf !== 'No';
+      return !!this.tab.support;
     },
     isRunning() {
       return this.tab.stopping || this.tab.running || !this.socket.connected || !this.tab.connected;
