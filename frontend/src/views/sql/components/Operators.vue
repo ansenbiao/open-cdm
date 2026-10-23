@@ -101,7 +101,7 @@
       <div class="right">
         <div class="limit-rows-container" v-if="tab.connected">
           <span class="limit-rows-label">{{ $t('xian-zhi-hang-shu') }}</span>
-          <InputNumber v-model:value="tab.maxRecordCount" :min="-1" :max="10000000" size="small" style="width: 90px"   :disabled="isRunning" />
+          <InputNumber v-model:value="tab.maxRecordCount" :min="-1" :max="10000000" size="small" style="width: 90px" :disabled="isRunning" />
         </div>
         <slot name="connection-context" />
       </div>
