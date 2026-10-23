@@ -628,7 +628,8 @@ export default {
           levels: this.browseGenLevelsData(this.tab.node),
           rdbAutoCommit: this.tab.autoCommit,
           rdbReadOnly: this.tab.readOnly,
-          rdbIsolation: this.tab.isolation
+          rdbIsolation: this.tab.isolation,
+          maxRecordCount: this.tab.maxRecordCount
         }
       };
 

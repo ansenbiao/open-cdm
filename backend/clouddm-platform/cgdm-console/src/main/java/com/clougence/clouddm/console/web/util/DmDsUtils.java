@@ -224,7 +224,10 @@ public class DmDsUtils {
             query.setDsId(dsCache.getDsNumId());
             ResultLimit limit = fetchResultLimit(configMap, query.getRequester());
             query.getResultConf().setQueryTimeoutSec(limit.getQueryTimeoutSec());
-            query.getResultConf().setFetchRecordCountLimit(limit.getFetchRecordCountLimit());
+            long currentFetchRecordCountLimit = query.getResultConf().getFetchRecordCountLimit();
+            if (currentFetchRecordCountLimit == 0) {
+                query.getResultConf().setFetchRecordCountLimit(limit.getFetchRecordCountLimit());
+            }
             query.getResultConf().setFetchResultSetBytesLimit(limit.getFetchResultSetBytesLimit());
             query.getResultConf().setFetchColumnBytesLimit(limit.getFetchColumnBytesLimit());
             query.getResultConf().setFetchElementBytesLimit(limit.getFetchElementBytesLimit());

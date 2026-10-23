@@ -338,6 +338,13 @@ public class ConsoleQueryService implements UnifiedPostConstruct, ConsoleQueryAp
             temp.getResultConf().setReceiveMode(queryDTO.getReceiveMode() == null ? ReceiveMode.PAGE_FULL : queryDTO.getReceiveMode());
         }
 
+        int maxRecordCount = queryDTO.getMaxRecordCount();
+        if (maxRecordCount > 0) {
+            temp.getResultConf().setFetchRecordCountLimit(maxRecordCount);
+        } else {
+            temp.getResultConf().setFetchRecordCountLimit(-1);
+        }
+
         // for Explain
         RewriteSpi rewriteSpi = null;
         if (isExplain) {

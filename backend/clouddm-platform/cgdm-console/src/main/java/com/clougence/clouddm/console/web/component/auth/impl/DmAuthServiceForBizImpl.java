@@ -57,6 +57,7 @@ import com.clougence.clouddm.sdk.execute.meta.DsElement;
 import com.clougence.clouddm.sdk.execute.session.QueryRequest;
 import com.clougence.clouddm.sdk.security.auth.AuthInfo;
 import com.clougence.clouddm.sdk.security.auth.AuthKind;
+import com.clougence.clouddm.sdk.security.auth.def.SecDataAuthLabel;
 import com.clougence.clouddm.sdk.sql.analysis.behavior.BehaviorObject;
 import com.clougence.clouddm.sdk.sql.analysis.behavior.BehaviorRelation;
 import com.clougence.clouddm.sdk.sql.analysis.sysobj.SysObjectRegistrySpi;
@@ -135,6 +136,7 @@ public class DmAuthServiceForBizImpl implements DmAuthServiceForBiz {
         long dsId = dsDO.getId();
         var sqlEngine = this.dmDsConfigService.fetchSqlEngineSpi(dsId);
         String sqlEngineName = sqlEngine.name();
+        boolean isDameng = "DamengSql".equals(sqlEngineName);
         SysObjectRegistrySpi registry = PluginManager.findSpi(SysObjectRegistrySpi.class, sqlEngineName);
         String currentResourcePath = DmDsUtils.currentResourcePath(levels.levelsParam());
         String instanceResourcePath = DmDsUtils.instanceResourcePath(levels.levelsParam());
@@ -157,7 +159,7 @@ public class DmAuthServiceForBizImpl implements DmAuthServiceForBiz {
                             continue;
                         }
                         String authLabel = resource.authKind().getAuthLabel();
-                        if (!this.checkResPathWithoutError(puid, uid, dsId, AuthKind.DataSource, () -> path, authLabel)) {
+                        if (!this.checkResPathWithDmlFallback(puid, uid, dsId, AuthKind.DataSource, () -> path, authLabel, isDameng)) {
                             return false;
                         }
                     }
@@ -174,12 +176,26 @@ public class DmAuthServiceForBizImpl implements DmAuthServiceForBiz {
                 BehaviorObject object = behavior.resource();
                 String resourcePath = BehaviorRelations.resourcePath(object, currentResourcePath, instanceResourcePath);
                 String authLabel = behavior.authKind().getAuthLabel();
-                if (!this.checkResPathWithoutError(puid, uid, dsId, AuthKind.DataSource, () -> resourcePath, authLabel)) {
+                if (!this.checkResPathWithDmlFallback(puid, uid, dsId, AuthKind.DataSource, () -> resourcePath, authLabel, isDameng)) {
                     deniedRequests.add(behavior);
                 }
             }
         }
         return new QueryRelationAuthResult(deniedRequests);
+    }
+
+    private boolean checkResPathWithDmlFallback(String puid, String uid, long resId, AuthKind authKind, DsResPath resPath, String dataAuthLabel, boolean isDameng) {
+        if (this.checkResPathWithoutError(puid, uid, resId, authKind, resPath, dataAuthLabel)) {
+            return true;
+        }
+        if (isDameng) {
+            if (SecDataAuthLabel.DM_DAUTH_QUERY.equals(dataAuthLabel)) {
+                return this.checkResPathWithoutError(puid, uid, resId, authKind, resPath, SecDataAuthLabel.DM_DAUTH_DML);
+            } else if (SecDataAuthLabel.DM_DAUTH_DML.equals(dataAuthLabel)) {
+                return this.checkResPathWithoutError(puid, uid, resId, authKind, resPath, SecDataAuthLabel.DM_DAUTH_QUERY);
+            }
+        }
+        return false;
     }
 
     @Override

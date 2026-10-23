@@ -42,6 +42,8 @@ public class WsQueryFO extends WsRequestFO {
     private boolean        rdbReadOnly;
     private RdbIsolation   rdbIsolation;
 
+    private int            maxRecordCount;
+
     private boolean        viewOriginData;
 
     @Override

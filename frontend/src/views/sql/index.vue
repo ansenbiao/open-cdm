@@ -1172,6 +1172,7 @@ export default {
         prefixKey,
         title: node.title,
         loading: false,
+        maxRecordCount: 500,
         cost: {
           popIndex: -1,
           popList: []

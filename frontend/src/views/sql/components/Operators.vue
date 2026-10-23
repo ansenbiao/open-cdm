@@ -99,6 +99,10 @@
         </div>
       </div>
       <div class="right">
+        <div class="limit-rows-container" v-if="tab.connected">
+          <span class="limit-rows-label">{{ $t('xian-zhi-hang-shu') }}</span>
+          <InputNumber v-model:value="tab.maxRecordCount" :min="-1" :max="10000000" size="small" style="width: 90px"   :disabled="isRunning" />
+        </div>
         <slot name="connection-context" />
       </div>
     </div>
@@ -274,6 +278,19 @@ export default {
   :deep(.ivu-checkbox-wrapper) {
     margin-right: 0;
     pointer-events: none;
+  }
+}
+
+.limit-rows-container {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 12px;
+
+  .limit-rows-label {
+    font-size: 12px;
+    color: #666;
+    white-space: nowrap;
   }
 }
 
