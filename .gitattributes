@@ -1,0 +1,7 @@
+# 自动检测文本文件，统一用 LF 存储
+* text=auto eol=lf
+
+# 特殊文件例外处理
+*.bat text eol=crlf      # Windows 批处理需要 CRLF
+*.sh  text eol=lf        # Shell 脚本必须 LF，否则 Linux 执行报错
+*.png binary             # 二进制文件不做转换
