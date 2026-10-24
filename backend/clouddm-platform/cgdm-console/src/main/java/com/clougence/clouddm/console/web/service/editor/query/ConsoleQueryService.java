@@ -310,11 +310,13 @@ public class ConsoleQueryService implements UnifiedPostConstruct, ConsoleQueryAp
     private static final RuleLevel[] CHECK_LEVELS_NORMAL = new RuleLevel[] { RuleLevel.FAILURE, RuleLevel.TICKET, RuleLevel.SUGGEST };
 
     private List<QueryRequest> prepareQueryRequests(WsQueryFO queryDTO, QueryCtx ctx, boolean isExplain, SqlParserParameters parameters) {
+        int userMaxRecordCount = queryDTO.getMaxRecordCount();
         AnalysisQueryOptions options = AnalysisQueryOptions.builder()
             .currentUid(queryDTO.getCurrentUserId())
             .dataSourceId(ctx.getLevels().dsDO().getId())
             .levels(ctx.getLevels().levelsParam())
             .parameters(parameters)
+            .userMaxRecordCount(userMaxRecordCount)
             .build();
         int codeLine = queryDTO.getBasicCodeLine();
         int codeColumn = queryDTO.getBasicCodeColumn();
@@ -339,12 +341,16 @@ public class ConsoleQueryService implements UnifiedPostConstruct, ConsoleQueryAp
         }
 
         int maxRecordCount = queryDTO.getMaxRecordCount();
+        log.info("[DEBUG] 前端传入的 maxRecordCount: {}", maxRecordCount);
+
         if (maxRecordCount > 0) {
             temp.getResultConf().setFetchRecordCountLimit(maxRecordCount);
-        } else {
+        } else if (maxRecordCount == -1) {
             temp.getResultConf().setFetchRecordCountLimit(-1);
+        } else {
+            temp.getResultConf().setFetchRecordCountLimit(0);
         }
-
+        log.info("[DEBUG] 设置后的 fetchRecordCountLimit: {}",temp.getResultConf().getFetchRecordCountLimit());
         // for Explain
         RewriteSpi rewriteSpi = null;
         if (isExplain) {

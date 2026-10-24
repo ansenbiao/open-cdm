@@ -349,7 +349,8 @@ export default {
       workspaceConnections: {},
       workspaceBlockedDsIds: [],
       sessionRequests: new Map(),
-      workspaceUnmounted: false
+      workspaceUnmounted: false,
+      userOnlineMaxRecordCount: 500
     };
   },
   beforeRouteEnter(to, from, next) {
@@ -385,6 +386,8 @@ export default {
     this.$bus.on(EVENT_BUS_NAME_LIST.SOCKET_CONNECTION_OPEN, this.handleGetDsSetting);
     this.$bus.on(EVENT_BUS_NAME_LIST.SET_DATA_SOURCE_STATUS, (data) => this.setInstanceErrorIcon(data));
 
+    this.fetchUserOnlineMaxRecordCount().catch((error) => appLogger.error('Failed to fetch user onlineMaxRecordCount config', error));
+
     this.currentTab.executeInfoScrollDown = true;
   },
   computed: {
@@ -410,6 +413,19 @@ export default {
     }
   },
   methods: {
+    async fetchUserOnlineMaxRecordCount() {
+      try {
+        const res = await this.$services.rdpUserConfigGetUserSpecifiedConfs({
+          data: { configNames: ['onlineMaxRecordCount'] }
+        });
+        if (res.success && res.data?.onlineMaxRecordCount != null) {
+          this.userOnlineMaxRecordCount = parseInt(res.data.onlineMaxRecordCount, 10) || 500;
+          appLogger.info('Fetched user onlineMaxRecordCount:', this.userOnlineMaxRecordCount);
+        }
+      } catch (error) {
+        appLogger.warn('Failed to fetch user onlineMaxRecordCount, using default 500', error);
+      }
+    },
     selectMobileWorkspace(view) {
       this.mobileView = view;
       if (view === 'datasources' && this.dataSourceSidebarHidden) {
@@ -1172,7 +1188,7 @@ export default {
         prefixKey,
         title: node.title,
         loading: false,
-        maxRecordCount: 500,
+        maxRecordCount: this.userOnlineMaxRecordCount,
         cost: {
           popIndex: -1,
           popList: []

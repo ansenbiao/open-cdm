@@ -205,15 +205,25 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
                 if (!Boolean.TRUE.equals(rewriteDisabled)) {
                     preparedRewriteSpi = sqlEngine.rewriteSpi(parameters);
                     if (preparedRewriteSpi != null) {
-                        Map<String, String> configMap = QueryAnalysisServiceImpl.this.configService.fetchSettingsMap(Arrays.asList(//
-                                RootUserConfig.Fields.defaultColumnDisplayChars, //
-                                RootUserConfig.Fields.onlineMaxRecordCount,      //
-                                RootUserConfig.Fields.onlineMaxResultSetMegaByte,//
-                                RootUserConfig.Fields.onlineMaxColumnMegaByte,   //
-                                RootUserConfig.Fields.onlineMaxElementMegaByte)  //
-                        );
-                        ResultLimit limit = DmDsUtils.fetchResultLimit(configMap, Requester.CONSOLE);
-                        preparedRewriteFetchLimit = limit.getFetchRecordCountLimit();
+                        int userMaxRecordCount = options.getUserMaxRecordCount();
+                        log.info("[DEBUG-REWRITE] userMaxRecordCount from options: {}", userMaxRecordCount);
+                        if (userMaxRecordCount > 0) {
+                            preparedRewriteFetchLimit = userMaxRecordCount;
+                        } else if (userMaxRecordCount == -1) {
+                            preparedRewriteFetchLimit = -1;
+                        } else {
+                            Map<String, String> configMap = QueryAnalysisServiceImpl.this.configService.fetchSettingsMap(Arrays.asList(//
+                                    RootUserConfig.Fields.defaultColumnDisplayChars, //
+                                    RootUserConfig.Fields.onlineMaxRecordCount,      //
+                                    RootUserConfig.Fields.onlineMaxResultSetMegaByte,//
+                                    RootUserConfig.Fields.onlineMaxColumnMegaByte,   //
+                                    RootUserConfig.Fields.onlineMaxElementMegaByte)  //
+                            );
+                            ResultLimit limit = DmDsUtils.fetchResultLimit(configMap, Requester.CONSOLE);
+                            preparedRewriteFetchLimit = limit.getFetchRecordCountLimit();
+                            log.info("[DEBUG-REWRITE] use system onlineMaxRecordCount: {}", preparedRewriteFetchLimit);
+                        }
+                        log.info("[DEBUG-REWRITE] final preparedRewriteFetchLimit: {}", preparedRewriteFetchLimit);
                     }
                 }
             }
@@ -264,7 +274,9 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
             RewriteContext rewriteCtx = new RewriteContext();
             rewriteCtx.setFetchLimit(this.rewriteFetchLimit);
             rewriteCtx.setParameters(this.parameters);
+            log.info("[DEBUG-REWRITE] rewriteCtx.fetchLimit: {}, before SQL: {}", this.rewriteFetchLimit, beforeRewrite);
             String afterRewrite = this.rewriteSpi.rewriteLimit(request.getQueryId(), beforeRewrite, rewriteCtx);
+            log.info("[DEBUG-REWRITE] after SQL: {}", afterRewrite);
 
             request.setOriginalBody(beforeRewrite);
             if (StringUtils.equals(beforeRewrite, afterRewrite)) {

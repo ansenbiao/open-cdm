@@ -614,6 +614,7 @@ export default {
       this.tab.running = true;
       this.tab.result.active = 'message';
       this.tab.currentQueryType = 'query';
+      console.log('[DEBUG-FRONTEND-SqlViewer] tab.maxRecordCount before send:', this.tab.maxRecordCount);
       const wsData = {
         type: WS_TYPE.WS_REQ_QUERY,
         object: {

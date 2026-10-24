@@ -515,6 +515,8 @@ public class DefaultRdbSession extends AbstractDsSession implements Session, Kil
         long beginFetchTimeMs = System.currentTimeMillis();
         long lastFetchTimeMs = System.currentTimeMillis();
         long maxFetchCountLimit = query.getResultConf().getFetchRecordCountLimit();
+        log.info("[DEBUG] 执行查询时的 maxFetchCountLimit: {}", maxFetchCountLimit);
+
         long maxPageSize = query.getResultConf().getFetchPageSize();
         ReceiveMode receiveMode = query.getResultConf().getReceiveMode();
 
