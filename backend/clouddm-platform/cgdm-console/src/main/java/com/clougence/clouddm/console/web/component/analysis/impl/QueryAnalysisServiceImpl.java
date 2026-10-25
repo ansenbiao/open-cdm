@@ -206,7 +206,6 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
                     preparedRewriteSpi = sqlEngine.rewriteSpi(parameters);
                     if (preparedRewriteSpi != null) {
                         int userMaxRecordCount = options.getUserMaxRecordCount();
-                        log.info("[DEBUG-REWRITE] userMaxRecordCount from options: {}", userMaxRecordCount);
                         if (userMaxRecordCount > 0) {
                             preparedRewriteFetchLimit = userMaxRecordCount;
                         } else if (userMaxRecordCount == -1) {
@@ -221,9 +220,7 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
                             );
                             ResultLimit limit = DmDsUtils.fetchResultLimit(configMap, Requester.CONSOLE);
                             preparedRewriteFetchLimit = limit.getFetchRecordCountLimit();
-                            log.info("[DEBUG-REWRITE] use system onlineMaxRecordCount: {}", preparedRewriteFetchLimit);
                         }
-                        log.info("[DEBUG-REWRITE] final preparedRewriteFetchLimit: {}", preparedRewriteFetchLimit);
                     }
                 }
             }
@@ -274,9 +271,7 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
             RewriteContext rewriteCtx = new RewriteContext();
             rewriteCtx.setFetchLimit(this.rewriteFetchLimit);
             rewriteCtx.setParameters(this.parameters);
-            log.info("[DEBUG-REWRITE] rewriteCtx.fetchLimit: {}, before SQL: {}", this.rewriteFetchLimit, beforeRewrite);
             String afterRewrite = this.rewriteSpi.rewriteLimit(request.getQueryId(), beforeRewrite, rewriteCtx);
-            log.info("[DEBUG-REWRITE] after SQL: {}", afterRewrite);
 
             request.setOriginalBody(beforeRewrite);
             if (StringUtils.equals(beforeRewrite, afterRewrite)) {

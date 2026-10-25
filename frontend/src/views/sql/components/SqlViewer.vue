@@ -614,7 +614,6 @@ export default {
       this.tab.running = true;
       this.tab.result.active = 'message';
       this.tab.currentQueryType = 'query';
-      console.log('[DEBUG-FRONTEND-SqlViewer] tab.maxRecordCount before send:', this.tab.maxRecordCount);
       const wsData = {
         type: WS_TYPE.WS_REQ_QUERY,
         object: {
@@ -630,7 +629,7 @@ export default {
           rdbAutoCommit: this.tab.autoCommit,
           rdbReadOnly: this.tab.readOnly,
           rdbIsolation: this.tab.isolation,
-          maxRecordCount: this.tab.maxRecordCount
+          maxRecordCount: Number.isFinite(this.tab.maxRecordCount) ? this.tab.maxRecordCount : -1
         }
       };
 

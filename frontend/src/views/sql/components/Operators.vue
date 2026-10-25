@@ -101,15 +101,7 @@
       <div class="right">
         <div class="limit-rows-container" v-if="tab.connected">
           <span class="limit-rows-label">{{ $t('xian-zhi-hang-shu') }}</span>
-          <InputNumber
-            :value="tab.maxRecordCount"
-            @change="onMaxRecordChange"
-            :min="-1"
-            :max="10000000"
-            size="small"
-            style="width: 90px"
-            :disabled="isRunning"
-          />
+          <InputNumber v-model="tab.maxRecordCount" :min="-1" :max="10000000" size="small" style="width: 90px" :disabled="isRunning" />
         </div>
         <slot name="connection-context" />
       </div>
@@ -213,11 +205,6 @@ export default {
       const next = !this.tab.readOnly;
       this.tab.readOnly = next;
       this.handleReadOnly(next);
-    },
-    onMaxRecordChange(value) {
-      console.log('[DEBUG-FRONTEND-Operator] InputNumber changed to:', value, 'before tab.maxRecordCount:', this.tab.maxRecordCount);
-      this.tab.maxRecordCount = value;
-      console.log('[DEBUG-FRONTEND-Operator] after tab.maxRecordCount:', this.tab.maxRecordCount);
     }
   }
 };

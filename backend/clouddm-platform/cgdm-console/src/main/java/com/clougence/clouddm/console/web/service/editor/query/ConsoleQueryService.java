@@ -341,8 +341,6 @@ public class ConsoleQueryService implements UnifiedPostConstruct, ConsoleQueryAp
         }
 
         int maxRecordCount = queryDTO.getMaxRecordCount();
-        log.info("[DEBUG] 前端传入的 maxRecordCount: {}", maxRecordCount);
-
         if (maxRecordCount > 0) {
             temp.getResultConf().setFetchRecordCountLimit(maxRecordCount);
         } else if (maxRecordCount == -1) {
@@ -350,7 +348,6 @@ public class ConsoleQueryService implements UnifiedPostConstruct, ConsoleQueryAp
         } else {
             temp.getResultConf().setFetchRecordCountLimit(0);
         }
-        log.info("[DEBUG] 设置后的 fetchRecordCountLimit: {}",temp.getResultConf().getFetchRecordCountLimit());
         // for Explain
         RewriteSpi rewriteSpi = null;
         if (isExplain) {

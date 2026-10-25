@@ -1457,6 +1457,9 @@ export default {
                 popList: []
               };
               tab.executeInfo = [];
+              if (!Number.isFinite(tab.maxRecordCount)) {
+                tab.maxRecordCount = this.userOnlineMaxRecordCount;
+              }
               tab.msgFromWs = false;
               tab.msgContent = '';
               const connection = this.getWorkspaceConnection(tab.dsId);
