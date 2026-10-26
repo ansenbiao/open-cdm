@@ -26,6 +26,14 @@ build
 *.tar.gz
 pom.xml.versionsBackup
 
+# 编译产物：class 文件与 IDE(JDT) 输出目录
+*.class
+**/bin/main/
+**/bin/test/
+**/bin/default/
+**/bin/generated-sources/
+**/bin/generated-test-sources/
+
 # codes
 gen
 
