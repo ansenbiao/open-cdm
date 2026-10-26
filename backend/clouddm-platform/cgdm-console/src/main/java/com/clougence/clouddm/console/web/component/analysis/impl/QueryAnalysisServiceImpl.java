@@ -205,22 +205,16 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
                 if (!Boolean.TRUE.equals(rewriteDisabled)) {
                     preparedRewriteSpi = sqlEngine.rewriteSpi(parameters);
                     if (preparedRewriteSpi != null) {
-                        int userMaxRecordCount = options.getUserMaxRecordCount();
-                        if (userMaxRecordCount > 0) {
-                            preparedRewriteFetchLimit = userMaxRecordCount;
-                        } else if (userMaxRecordCount == -1) {
-                            preparedRewriteFetchLimit = -1;
-                        } else {
-                            Map<String, String> configMap = QueryAnalysisServiceImpl.this.configService.fetchSettingsMap(Arrays.asList(//
-                                    RootUserConfig.Fields.defaultColumnDisplayChars, //
-                                    RootUserConfig.Fields.onlineMaxRecordCount,      //
-                                    RootUserConfig.Fields.onlineMaxResultSetMegaByte,//
-                                    RootUserConfig.Fields.onlineMaxColumnMegaByte,   //
-                                    RootUserConfig.Fields.onlineMaxElementMegaByte)  //
-                            );
-                            ResultLimit limit = DmDsUtils.fetchResultLimit(configMap, Requester.CONSOLE);
-                            preparedRewriteFetchLimit = limit.getFetchRecordCountLimit();
-                        }
+                        // 改写层与取数层必须使用同一个生效上限，否则 LIMIT 与实际截断行数会不一致。
+                        Map<String, String> configMap = QueryAnalysisServiceImpl.this.configService.fetchSettingsMap(Arrays.asList(//
+                                RootUserConfig.Fields.defaultColumnDisplayChars, //
+                                RootUserConfig.Fields.onlineMaxRecordCount,      //
+                                RootUserConfig.Fields.onlineMaxResultSetMegaByte,//
+                                RootUserConfig.Fields.onlineMaxColumnMegaByte,   //
+                                RootUserConfig.Fields.onlineMaxElementMegaByte)  //
+                        );
+                        ResultLimit systemLimit = DmDsUtils.fetchResultLimit(configMap, Requester.CONSOLE);
+                        preparedRewriteFetchLimit = DmDsUtils.resolveFetchRecordCountLimit(options.getUserMaxRecordCount(), systemLimit.getFetchRecordCountLimit());
                     }
                 }
             }

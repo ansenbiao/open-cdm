@@ -340,14 +340,9 @@ public class ConsoleQueryService implements UnifiedPostConstruct, ConsoleQueryAp
             temp.getResultConf().setReceiveMode(queryDTO.getReceiveMode() == null ? ReceiveMode.PAGE_FULL : queryDTO.getReceiveMode());
         }
 
-        int maxRecordCount = queryDTO.getMaxRecordCount();
-        if (maxRecordCount > 0) {
-            temp.getResultConf().setFetchRecordCountLimit(maxRecordCount);
-        } else if (maxRecordCount == -1) {
-            temp.getResultConf().setFetchRecordCountLimit(-1);
-        } else {
-            temp.getResultConf().setFetchRecordCountLimit(0);
-        }
+        // 只记录用户诉求：>0 为指定行数，-1 为请求不限制，0 为未指定。
+        // 生效上限统一由 DmDsUtils.fillRequestConfig 按系统配置钳制，避免客户端绕过治理红线。
+        temp.getResultConf().setFetchRecordCountLimit(queryDTO.getMaxRecordCount());
         // for Explain
         RewriteSpi rewriteSpi = null;
         if (isExplain) {

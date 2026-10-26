@@ -101,7 +101,7 @@
       <div class="right">
         <div class="limit-rows-container" v-if="tab.connected">
           <span class="limit-rows-label">{{ $t('xian-zhi-hang-shu') }}</span>
-          <InputNumber v-model="tab.maxRecordCount" :min="-1" :max="10000000" size="small" style="width: 90px" :disabled="isRunning" />
+          <InputNumber v-model="tab.maxRecordCount" :min="limitRowsMin" :max="limitRowsMax" size="small" style="width: 90px" :disabled="isRunning" />
         </div>
         <slot name="connection-context" />
       </div>
@@ -111,6 +111,7 @@
 <script>
 import { canFormatSql } from '@/components/editor/sqlFormat';
 import appLogger from '@/utils/logger';
+import { QUERY_LIMIT } from '@/const';
 import { mapGetters, mapState } from 'vuex';
 import browseMixin from '@/mixins/browseMixin';
 
@@ -163,6 +164,13 @@ export default {
     },
     isRunning() {
       return this.tab.stopping || this.tab.running || !this.socket.connected || !this.tab.connected;
+    },
+    // 可输入区间与后端配置口径一致；-1（不限制）是否生效由系统上限决定
+    limitRowsMin() {
+      return QUERY_LIMIT.NO_LIMIT;
+    },
+    limitRowsMax() {
+      return QUERY_LIMIT.MAX_RECORD_COUNT;
     },
     isStoping() {
       return this.tab.stopping || !this.socket.connected || !this.tab.connected;

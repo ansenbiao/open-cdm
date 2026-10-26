@@ -155,6 +155,15 @@ export const TAB_TYPE = {
   DATA: 'DATA'
 };
 
+// 数据查询窗口“限制行数”：取值口径与后端配置 onlineMaxRecordCount 一致，NO_LIMIT 仅在系统配置允许时生效
+export const QUERY_LIMIT = {
+  // 0 表示“未指定”，由系统配置决定生效上限；-1 表示请求不限制行数
+  SYSTEM_DEFAULT: 0,
+  NO_LIMIT: -1,
+  DEFAULT_RECORD_COUNT: 1000,
+  MAX_RECORD_COUNT: 1000000
+};
+
 export const EMPTY_FORCE_RULE_MODAL = {
   show: false,
   title: '',

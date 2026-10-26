@@ -47,11 +47,13 @@ import com.clougence.utils.format.WellKnowFormat;
  **/
 public class DmDsUtils {
 
-    private static final Map<DataSourceType, SessionSpi> DS_SESSION_SPI_CACHE = new ConcurrentHashMap<>();
-    private static final Map<DataSourceType, Dialect>    DS_DIALECT_CACHE     = new ConcurrentHashMap<>();
+    private static final Map<DataSourceType, SessionSpi> DS_SESSION_SPI_CACHE       = new ConcurrentHashMap<>();
+    private static final Map<DataSourceType, Dialect>    DS_DIALECT_CACHE           = new ConcurrentHashMap<>();
     private static ObjectCacheDao                        ownerCacheService;
     private static ConsoleConfigService                  consoleService;
-    private final static long                            MB_SIZE              = 1024L * 1024L;
+    private final static long                            MB_SIZE                    = 1024L * 1024L;
+    /** 行数上限配置缺失或非法时的兜底上限，避免出现“无上限”的结果集。 */
+    final static int                                     DEFAULT_RECORD_COUNT_LIMIT = 3000;
 
     public static void initUtils(ApplicationContext spring) {
         ownerCacheService = spring.getBean(ObjectCacheDao.class);
@@ -189,14 +191,14 @@ public class DmDsUtils {
     public static ResultLimit fetchResultLimit(Map<String, String> configMap, Requester requester) {
         ResultLimit limit = new ResultLimit();
         if (requester.isOnline()) {
-            limit.setFetchRecordCountLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.onlineMaxRecordCount), 3000));
+            limit.setFetchRecordCountLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.onlineMaxRecordCount), DEFAULT_RECORD_COUNT_LIMIT));
             limit.setFetchResultSetBytesLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.onlineMaxResultSetMegaByte), 200) * MB_SIZE);
             limit.setFetchColumnBytesLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.onlineMaxColumnMegaByte), 4) * MB_SIZE);
             limit.setFetchElementBytesLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.onlineMaxElementMegaByte), 1) * MB_SIZE);
             limit.setFetchPageSize(30);
             limit.setQueryTimeoutSec(30);// default 30 seconds for console
         } else {
-            limit.setFetchRecordCountLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.taskMaxRecordCount), 3000));
+            limit.setFetchRecordCountLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.taskMaxRecordCount), DEFAULT_RECORD_COUNT_LIMIT));
             limit.setFetchResultSetBytesLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.taskMaxResultSetMegaByte), 200) * MB_SIZE);
             limit.setFetchColumnBytesLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.taskMaxColumnMegaByte), 4) * MB_SIZE);
             limit.setFetchElementBytesLimit(safeGetConfSize(configMap.get(RootUserConfig.Fields.taskMaxElementMegaByte), 1) * MB_SIZE);
@@ -204,6 +206,23 @@ public class DmDsUtils {
             limit.setQueryTimeoutSec(300);// default 5 minutes for task
         }
         return limit;
+    }
+
+    /**
+     * 系统配置是治理红线，调用方给出的行数只能在其之下收窄结果集。
+     * 系统上限为正数时：正数取两者较小值，0（未指定）与负数（请求不限制）都收敛到系统上限。
+     * 系统上限为负数时：表示管理员允许不限制，未指定按不限制处理，其余尊重调用方取值。
+     * 系统上限为 0 属于非法配置，按默认上限兜底，避免配置异常退化为不限制。
+     */
+    public static long resolveFetchRecordCountLimit(long requestedRecordCountLimit, long systemMaxRecordCount) {
+        long ceiling = systemMaxRecordCount == 0 ? DEFAULT_RECORD_COUNT_LIMIT : systemMaxRecordCount;
+        if (ceiling < 0) {
+            return requestedRecordCountLimit == 0 ? ceiling : requestedRecordCountLimit;
+        }
+        if (requestedRecordCountLimit > 0) {
+            return Math.min(requestedRecordCountLimit, ceiling);
+        }
+        return ceiling;
     }
 
     public static void fillRequestConfig(List<QueryRequest> queryList, long dsId) {
@@ -224,10 +243,8 @@ public class DmDsUtils {
             query.setDsId(dsCache.getDsNumId());
             ResultLimit limit = fetchResultLimit(configMap, query.getRequester());
             query.getResultConf().setQueryTimeoutSec(limit.getQueryTimeoutSec());
-            long currentFetchRecordCountLimit = query.getResultConf().getFetchRecordCountLimit();
-            if (currentFetchRecordCountLimit == 0) {
-                query.getResultConf().setFetchRecordCountLimit(limit.getFetchRecordCountLimit());
-            }
+            long systemMaxRecordCount = limit.getFetchRecordCountLimit();
+            query.getResultConf().setFetchRecordCountLimit(resolveFetchRecordCountLimit(query.getResultConf().getFetchRecordCountLimit(), systemMaxRecordCount));
             query.getResultConf().setFetchResultSetBytesLimit(limit.getFetchResultSetBytesLimit());
             query.getResultConf().setFetchColumnBytesLimit(limit.getFetchColumnBytesLimit());
             query.getResultConf().setFetchElementBytesLimit(limit.getFetchElementBytesLimit());
@@ -242,6 +259,13 @@ public class DmDsUtils {
     }
 
     private static int safeGetConfSize(String val, int defaultVal) {
-        return StringUtils.isBlank(val) ? defaultVal : Integer.parseInt(val);
+        if (StringUtils.isBlank(val)) {
+            return defaultVal;
+        }
+        try {
+            return Integer.parseInt(val.trim());
+        } catch (NumberFormatException e) {
+            return defaultVal;
+        }
     }
 }

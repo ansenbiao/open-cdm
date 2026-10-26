@@ -242,7 +242,7 @@ import { isCancel } from 'axios';
 import SqlViewer from '@/views/sql/components/SqlViewer';
 import Result from '@/views/sql/components/Result';
 import './style/index.less';
-import { ACTION_TYPE, BIZ_TYPE, TAB_TYPE } from '@/const';
+import { ACTION_TYPE, BIZ_TYPE, QUERY_LIMIT, TAB_TYPE } from '@/const';
 import TableList from '@/views/sql/components/TableList';
 import StructView from '@/views/sql/components/StructView';
 import DataSourceTree from '@/views/sql/components/DataSourceTree';
@@ -350,7 +350,8 @@ export default {
       workspaceBlockedDsIds: [],
       sessionRequests: new Map(),
       workspaceUnmounted: false,
-      userOnlineMaxRecordCount: 500
+      // 系统配置 onlineMaxRecordCount，取不到时用 QUERY_LIMIT.DEFAULT_RECORD_COUNT 兜底
+      userOnlineMaxRecordCount: QUERY_LIMIT.DEFAULT_RECORD_COUNT
     };
   },
   beforeRouteEnter(to, from, next) {
@@ -376,7 +377,10 @@ export default {
     this.listDockTask().catch((error) => appLogger.error('Load async tasks failed', error));
     await this.setDataViewImage();
     try {
+      // 先拿到系统行数上限再恢复工作区，避免用兜底值覆盖用户配置
+      const onlineMaxRecordCount = this.fetchUserOnlineMaxRecordCount();
       await this.getDataSourceData();
+      await onlineMaxRecordCount;
       await this.getLocalQueryData();
     } finally {
       this.restoringWorkspace = false;
@@ -386,11 +390,13 @@ export default {
     this.$bus.on(EVENT_BUS_NAME_LIST.SOCKET_CONNECTION_OPEN, this.handleGetDsSetting);
     this.$bus.on(EVENT_BUS_NAME_LIST.SET_DATA_SOURCE_STATUS, (data) => this.setInstanceErrorIcon(data));
 
-    this.fetchUserOnlineMaxRecordCount().catch((error) => appLogger.error('Failed to fetch user onlineMaxRecordCount config', error));
-
     this.currentTab.executeInfoScrollDown = true;
   },
   computed: {
+    // 系统上限为 -1 时表示管理员允许不限制，但新建/恢复的查询页签仍需一个具体默认行数
+    defaultMaxRecordCount() {
+      return this.userOnlineMaxRecordCount > 0 ? this.userOnlineMaxRecordCount : QUERY_LIMIT.DEFAULT_RECORD_COUNT;
+    },
     mobileTabs() {
       return [
         { name: 'datasources', label: this.$t('sql-mobile-datasources') },
@@ -419,11 +425,14 @@ export default {
           data: { configNames: ['onlineMaxRecordCount'] }
         });
         if (res.success && res.data?.onlineMaxRecordCount != null) {
-          this.userOnlineMaxRecordCount = parseInt(res.data.onlineMaxRecordCount, 10) || 500;
+          const parsed = parseInt(res.data.onlineMaxRecordCount, 10);
+          if (Number.isFinite(parsed)) {
+            this.userOnlineMaxRecordCount = parsed;
+          }
           appLogger.info('Fetched user onlineMaxRecordCount:', this.userOnlineMaxRecordCount);
         }
       } catch (error) {
-        appLogger.warn('Failed to fetch user onlineMaxRecordCount, using default 500', error);
+        appLogger.warn('Failed to fetch user onlineMaxRecordCount, using default', QUERY_LIMIT.DEFAULT_RECORD_COUNT, error);
       }
     },
     selectMobileWorkspace(view) {
@@ -1188,7 +1197,7 @@ export default {
         prefixKey,
         title: node.title,
         loading: false,
-        maxRecordCount: this.userOnlineMaxRecordCount,
+        maxRecordCount: this.defaultMaxRecordCount,
         cost: {
           popIndex: -1,
           popList: []
@@ -1457,8 +1466,10 @@ export default {
                 popList: []
               };
               tab.executeInfo = [];
-              if (!Number.isFinite(tab.maxRecordCount)) {
-                tab.maxRecordCount = this.userOnlineMaxRecordCount;
+              if (tab.maxRecordCount !== '' && tab.maxRecordCount !== null && Number.isFinite(Number(tab.maxRecordCount))) {
+                tab.maxRecordCount = Math.trunc(Number(tab.maxRecordCount));
+              } else {
+                tab.maxRecordCount = this.defaultMaxRecordCount;
               }
               tab.msgFromWs = false;
               tab.msgContent = '';

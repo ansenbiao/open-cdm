@@ -170,6 +170,7 @@ import browseMixin from '@/mixins/browseMixin';
 import { sendWebSocket } from '@/services/socket';
 import sqlMixin from '@/mixins/sqlMixin';
 import { RULE_WARN_LEVEL, WS_REQ_QUERY_TYPE, WS_TYPE } from '@/utils';
+import { QUERY_LIMIT } from '@/const';
 import { UPDATE_SOCKET_STATUS } from '@/store/mutationTypes';
 import { EVENT_BUS_NAME_LIST } from '@/utils/eventBusName';
 import formatError from '@/services/formatError';
@@ -614,6 +615,8 @@ export default {
       this.tab.running = true;
       this.tab.result.active = 'message';
       this.tab.currentQueryType = 'query';
+      // 非法或空值不能退成 -1（不限制），统一交回系统上限，由后端钳制生效行数
+      const requestedMaxRecordCount = Math.trunc(Number(this.tab.maxRecordCount));
       const wsData = {
         type: WS_TYPE.WS_REQ_QUERY,
         object: {
@@ -629,7 +632,7 @@ export default {
           rdbAutoCommit: this.tab.autoCommit,
           rdbReadOnly: this.tab.readOnly,
           rdbIsolation: this.tab.isolation,
-          maxRecordCount: Number.isFinite(this.tab.maxRecordCount) ? this.tab.maxRecordCount : -1
+          maxRecordCount: Number.isFinite(requestedMaxRecordCount) ? requestedMaxRecordCount : QUERY_LIMIT.SYSTEM_DEFAULT
         }
       };
 
