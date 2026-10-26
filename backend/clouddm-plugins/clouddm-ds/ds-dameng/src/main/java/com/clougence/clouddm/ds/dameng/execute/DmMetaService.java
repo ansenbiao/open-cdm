@@ -48,6 +48,10 @@ public class DmMetaService extends DefaultRdbMetaService {
     @Override
     public Map<String, String> getSqlParserParameters() {
         String databaseVersion = this.fetchVersion("SELECT DB_VERSION FROM V$INSTANCE");
+        if (!DmVersion.isRecognized(databaseVersion)) {
+            // 版本无法识别时解析器会退到最高版本，达梦系统资源免鉴权规则因此保持开启，需要运维知情。
+            log.warn("Unrecognized Dameng DB_VERSION [{}], SQL analysis falls back to DM{}.", databaseVersion, DmVersion.LATEST.versionString());
+        }
         return Map.of(SqlParserParameters.VERSION, DmVersion.parse(databaseVersion).versionString());
     }
 
