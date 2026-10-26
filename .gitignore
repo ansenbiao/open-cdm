@@ -37,6 +37,12 @@ pom.xml.versionsBackup
 # codes
 gen
 
+# java_formatter 的 Gradle Wrapper(由 gradle wrapper 命令生成,无需入库;
+# 格式化脚本实际使用 backend/gradlew，后者仍正常跟踪)
+/scripts/java_formatter/gradlew
+/scripts/java_formatter/gradlew.bat
+/scripts/java_formatter/gradle/wrapper/
+
 # buildTools
 /package/build/
 
