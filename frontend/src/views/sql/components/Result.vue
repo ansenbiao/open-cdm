@@ -250,7 +250,7 @@
               <template v-if="column.dataIndex !== 'seq'">
                 <div class="vxe-input-tpl" @dblclick.stop="handleCellDetail(record, column, index)">
                   <span v-if="record[column.dataIndex] === null" style="color: #ccc; font-style: italic">NULL</span>
-                  <pre v-else style="overflow: hidden; margin: 0">{{ record[column.dataIndex] }}</pre>
+                  <pre v-else style="overflow: hidden; margin: 0">{{ cellDisplayValue(record, column) }}</pre>
                   <div v-if="!getCellComplete(column, index)" class="cell-incomplete-badge"></div>
                   <div class="op">
                     <div @click.stop="handleCellCopy(record, column, index)" style="margin-right: 3px">
@@ -488,6 +488,7 @@ import { mapGetters, mapState } from 'vuex';
 import CustomIcon from '@/components/function/CustomIcon.vue';
 import ExecutionSqlText from '@/views/sql/components/ExecutionSqlText.vue';
 import { getBaseEditorLanguage } from '@/components/editor/sqlLanguage';
+import { isBinaryType, decodeHexToText } from '@/utils/cellValueDisplay';
 import ContextMenu from '@imengyu/vue3-context-menu';
 import XEClipboard from 'xe-clipboard';
 
@@ -1218,6 +1219,19 @@ export default {
 
       return content;
     },
+    // Grid display value for a cell: text-bearing binary columns are decoded from hex to readable text (the backend already sends a truncated sample).
+    cellDisplayValue(record, column) {
+      const raw = record[column.dataIndex];
+      if (raw === null || raw === undefined) {
+        return raw;
+      }
+      const colIndex = this.selectedTab.columnList?.findIndex((col) => col === column.dataIndex || col === column.property) ?? -1;
+      if (colIndex < 0 || !isBinaryType(this.selectedTab.columnType?.[colIndex])) {
+        return raw;
+      }
+      const decoded = decodeHexToText(String(raw));
+      return decoded === null ? raw : decoded;
+    },
     // Get the cell's complete flag to decide whether to show the corner marker.
     getCellComplete(column, rowIndex) {
       const cellMeta = this.getCellValueMeta(column, rowIndex);
@@ -1232,6 +1246,26 @@ export default {
       const rowNumber = cellMeta ? cellMeta.rowNumber : rowIndex;
       const cellValue = record[column.dataIndex || column.property] || '';
 
+      // Context used by the cell detail modal to offer single-cell UPDATE editing.
+      const node = this.tab.node || null;
+      const levels = node && Array.isArray(node.levels) ? node.levels.map((level) => node[level].id) : null;
+      const updateContext = {
+        levels,
+        sessionId: this.tab.sessionId || '',
+        targetName: node ? node.title : '',
+        targetType: this.tab.leafType || 'TABLE',
+        effectiveSql: this.selectedTab.querySql || '',
+        activeTabType: this.tab.type
+      };
+      // Raw per-column values of the row (with null/complete flags) for building row locators in the modal.
+      let rowRaw = null;
+      if (cellMeta) {
+        const rawData = this.getRawRowData(cellMeta.rowNumber, rowIndex);
+        if (rawData) {
+          rowRaw = rawData;
+        }
+      }
+
       this.$bus.emit('showCellDetailModal', {
         row: record,
         column: { property: column.dataIndex || column.property, columnType: this.selectedTab.columnType?.[colIndex] },
@@ -1243,8 +1277,33 @@ export default {
         totalSize: cellMeta ? cellMeta.totalSize : 0,
         complete: cellMeta ? cellMeta.complete : true,
         error: cellMeta ? cellMeta.error : false,
-        mask: cellMeta ? cellMeta.mask : false
+        mask: cellMeta ? cellMeta.mask : false,
+        dsType: this.tab.dsType,
+        dataSourceType: this.tab.dataSourceType,
+        connected: !!this.tab.connected,
+        activeTabType: this.tab.type,
+        columnList: this.selectedTab.columnList || [],
+        rowRaw,
+        updateContext
       });
+    },
+    // Locate the raw row (array of per-cell value objects) for the given displayed row index.
+    getRawRowData(rowNumber, rowIndex) {
+      const receiveMode = this.selectedTab.receiveMode || 'PAGE_FULL';
+      if (receiveMode === 'PAGINATED') {
+        const currentPage = this.selectedTab.page || 1;
+        const rowItem = this.selectedTab.rowSetCache?.[currentPage]?.[rowIndex];
+        return rowItem ? rowItem.data || rowItem.row : null;
+      }
+      if (receiveMode === 'STREAM') {
+        const rowItem = this.selectedTab.rowSetStream?.[rowIndex];
+        return rowItem ? rowItem.data || rowItem.row : null;
+      }
+      const rowItem = this.selectedTab.data?.[rowNumber];
+      if (!rowItem) {
+        return null;
+      }
+      return Array.isArray(rowItem) ? rowItem : rowItem.data || rowItem.row;
     },
     generateRowInsert(row) {
       const { dsType } = this.tab;

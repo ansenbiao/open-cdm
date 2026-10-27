@@ -45,17 +45,50 @@
     <div class="user-expr-tip" v-if="userInfo.subAccountPwdValidDays !== null && userInfo.subAccountPwdValidDays < limitDays">
       {{ $t('gen-ju-zhu-zhang-hao-she-zhi-de-mi-ma-shi-xiao-ce-lue', [userInfo.subAccountPwdValidDays + 1]) }}
     </div>
-    <CCModal v-model="showDetailModal" :title="selectedCellDetail.column.property" v-if="showDetailModal" key="showDetailModal" :width="800">
+    <CCModal v-model="showDetailModal" :title="selectedCellDetail.column.property" v-if="showDetailModal" key="showCellDetailModal" :width="800">
       <div class="cell-detail">
-        <ReadOnlyEditor
-          v-if="cellDetailJsonView"
-          :text="cellDetailContent"
-          language="json"
-          :format-json="selectedCellDetail.complete && !hasMoreData && !cellDetailLoading"
-          :border="0"
-          :max-height="360"
-        />
-        <a-textarea v-else v-model:value="cellDetailContent" :rows="15" readonly style="font-family: monospace; font-size: 12px" />
+        <template v-if="cellEdit.active">
+          <ReadOnlyEditor v-if="cellDetailJsonView" :text="cellDetailContent" language="json" :border="0" :max-height="360" />
+          <a-textarea
+            v-else
+            v-model:value="cellDetailContent"
+            :rows="15"
+            :disabled="cellEdit.setNull"
+            style="font-family: monospace; font-size: 12px"
+          />
+          <div class="cell-edit-toolbar">
+            <a-checkbox v-model:checked="cellEdit.setNull">NULL</a-checkbox>
+            <span class="cell-edit-hint" v-if="cellEdit.columnMeta">{{ cellEdit.columnMeta.dbType || cellEdit.columnMeta.type }}</span>
+            <template v-if="cellEdit.columnMeta && isBinaryColumnType(cellEdit.columnMeta.dbType)">
+              <a-radio-group :value="cellEdit.binaryAsText" size="small" @change="(e) => handleBinaryModeToggle(e.target.value)">
+                <a-radio-button :value="false">{{ cellEditHexLabel }}</a-radio-button>
+                <a-radio-button :value="true">{{ $t('wen-ben') }}</a-radio-button>
+              </a-radio-group>
+              <span class="cell-edit-hint">
+                {{ cellEdit.binaryAsText ? $t('wen-ben-jiang-an-utf-8-zi-jie-xie-ru') : $t('er-jin-zhi-bian-ji-xian-shi-mo-shi') }}
+              </span>
+            </template>
+          </div>
+          <div v-if="cellEdit.sql" class="cell-edit-sql-preview">
+            <div class="cell-edit-sql-label">{{ $t('jiang-zhi-xing-de-geng-xin-yu-ju') }}</div>
+            <pre>{{ cellEdit.sql }}</pre>
+          </div>
+        </template>
+        <template v-else>
+          <ReadOnlyEditor
+            v-if="cellDetailJsonView"
+            :text="cellDetailContent"
+            language="json"
+            :format-json="selectedCellDetail.complete && !hasMoreData && !cellDetailLoading"
+            :border="0"
+            :max-height="360"
+          />
+          <template v-else-if="cellDecodedText">
+            <div class="cell-decode-hint">{{ $t('er-jin-zhi-yi-an-wen-ben-xian-shi') }}</div>
+            <ReadOnlyEditor :text="cellDecodedText" language="plaintext" :border="0" :max-height="360" />
+          </template>
+          <a-textarea v-else v-model:value="cellDetailContent" :rows="15" readonly style="font-family: monospace; font-size: 12px" />
+        </template>
         <div v-if="cellDetailLoading" class="cell-detail-loading">
           <a-spin :spinning="cellDetailLoading" />
           <span style="margin-left: 8px">{{ $t('zheng-zai-jia-zai') }}</span>
@@ -68,8 +101,17 @@
         <a-button v-if="isJsonCell" @click="cellDetailJsonView = !cellDetailJsonView">
           {{ $t(cellDetailJsonView ? 'query-text-view' : 'query-json-view') }}
         </a-button>
-        <a-button type="primary" @click="handleDetailCopy">{{ $t('fu-zhi') }}</a-button>
-        <a-button @click="handleCloseCellDetailModal">{{ $t('guan-bi') }}</a-button>
+        <template v-if="cellEdit.active">
+          <a-button type="primary" :loading="cellEdit.generating" @click="handleGenerateUpdateSql">{{ $t('bao-cun') }}</a-button>
+          <a-button @click="handleCancelCellEdit">{{ $t('qu-xiao') }}</a-button>
+        </template>
+        <template v-else>
+          <a-button v-if="cellEdit.eligible" type="primary" ghost :loading="cellEdit.checking" @click="handleStartCellEdit">
+            {{ $t('bian-ji') }}
+          </a-button>
+          <a-button @click="handleDetailCopy">{{ $t('fu-zhi') }}</a-button>
+          <a-button type="primary" @click="handleCloseCellDetailModal">{{ $t('guan-bi') }}</a-button>
+        </template>
       </template>
     </CCModal>
     <CCModal v-model="showInactiveModal" :title="$t('cuo-wu')" :closable="false" :mask-closable="false">
@@ -116,6 +158,8 @@ import store from '@/store';
 import dayjs from 'dayjs';
 import fecha from 'fecha';
 import { EVENT_BUS_NAME_LIST } from '@/utils/eventBusName';
+import { decodeHexToText } from '@/utils/cellValueDisplay';
+import { TAB_TYPE } from '@/const';
 import { resolveWorkbenchFallbackPath, resolveWorkbenchRoute } from '@/utils/workbenchRoute';
 
 export default {
@@ -154,12 +198,37 @@ export default {
         totalSize: 0,
         complete: true,
         error: false,
-        mask: false
+        mask: false,
+        dsType: '',
+        dataSourceType: '',
+        connected: false,
+        activeTabType: '',
+        columnList: [],
+        rowRaw: null
       },
       cellDetailContent: '',
+      cellEditHexLabel: 'HEX',
       cellDetailJsonView: false,
       cellDetailLoading: false,
       hasMoreData: false,
+      // Single-cell UPDATE editing state for the detail modal.
+      cellEdit: {
+        eligible: false,
+        checking: false,
+        active: false,
+        generating: false,
+        setNull: false,
+        binaryAsText: false,
+        sql: '',
+        columnMeta: null,
+        tableName: null,
+        tableMeta: null,
+        context: null,
+        conditionCols: [],
+        findColumn: null,
+        savedContent: ''
+      },
+      cellUpdateTimeout: null,
       limitDays: 6,
       watermarkStr: '',
       store,
@@ -174,6 +243,16 @@ export default {
     ...mapGetters(['isSaas']),
     isJsonCell() {
       return ['JSON_DOCUMENT', 'JSON', 'JSONB'].includes(this.selectedCellDetail.column.columnType) && !this.selectedCellDetail.error;
+    },
+    // In view mode, a text-bearing binary cell is decoded from hex to readable text and shown as a read-only document; real binary stays as hex.
+    cellDecodedText() {
+      if (this.cellEdit.active || this.selectedCellDetail.error || this.selectedCellDetail.mask) {
+        return null;
+      }
+      if (!this.isBinaryColumnType(this.selectedCellDetail.column.columnType)) {
+        return null;
+      }
+      return decodeHexToText(this.cellDetailContent);
     },
     isSqlRoute() {
       return this.$route.path === '/sql' || this.$route.path.startsWith('/sql/');
@@ -200,6 +279,10 @@ export default {
       appLogger.debug('showCellDetailModal', data);
       if (!this.showDetailModal) {
         this.showDetailModal = true;
+        this.resetCellEditState();
+        this.cellEdit.eligible = this.checkCellEditEligibility(data);
+        this.cellEdit.context = data.updateContext || null;
+        this.$_cellEditStash = data.updateContext || null;
         this.selectedCellDetail = {
           row: data.row || {},
           column: data.column || {},
@@ -211,8 +294,16 @@ export default {
           totalSize: data.totalSize || 0,
           complete: data.complete !== undefined ? data.complete : true,
           error: data.error || false,
-          mask: data.mask || false
+          mask: data.mask || false,
+          dsType: data.dsType || '',
+          dataSourceType: data.dataSourceType || '',
+          connected: !!data.connected,
+          activeTabType: data.activeTabType || '',
+          columnList: data.columnList || [],
+          rowRaw: data.rowRaw || null
         };
+        // Full texts fetched for truncated locator columns during this edit session (non-reactive cache).
+        this.$_cellFullValues = {};
         // Initialize content (show initial values)
         this.cellDetailContent = this.selectedCellDetail.cellValue || '';
         this.cellDetailJsonView = this.isJsonCell;
@@ -228,6 +319,7 @@ export default {
     this.$bus.on('showEnterOpPwdModal', this.showEnterOpPwdModal);
     this.$bus.on('dingDingSettingModal', this.setApprovalProcessModal);
     this.$bus.on(EVENT_BUS_NAME_LIST.SHOW_INACTIVE_MODAL, (msg) => this.handleShowInactiveModal(msg));
+    this.$bus.on(EVENT_BUS_NAME_LIST.CELL_UPDATE_OUTCOME, this.handleCellUpdateOutcome);
     await this.checkVersion();
   },
   unmounted() {
@@ -236,6 +328,7 @@ export default {
     this.$bus.off('dingDingSettingModal');
     this.$bus.off('showCellDetailModal');
     this.$bus.off(EVENT_BUS_NAME_LIST.SHOW_INACTIVE_MODAL);
+    this.$bus.off(EVENT_BUS_NAME_LIST.CELL_UPDATE_OUTCOME);
   },
   methods: {
     handleShowInactiveModal(msg) {
@@ -284,6 +377,12 @@ export default {
       this.cellDetailContent = '';
       this.hasMoreData = false;
       this.cellDetailLoading = false;
+      if (this.cellUpdateTimeout) {
+        clearTimeout(this.cellUpdateTimeout);
+        this.cellUpdateTimeout = null;
+      }
+      this.$_cellEditStash = null;
+      this.resetCellEditState();
       this.selectedCellDetail = {
         column: {},
         row: {},
@@ -295,7 +394,13 @@ export default {
         totalSize: 0,
         complete: true,
         error: false,
-        mask: false
+        mask: false,
+        dsType: '',
+        dataSourceType: '',
+        connected: false,
+        activeTabType: '',
+        columnList: [],
+        rowRaw: null
       };
     },
     async handleLoadMoreCellData(isInitial = false) {
@@ -367,6 +472,436 @@ export default {
         if (selectedDetail === this.selectedCellDetail) {
           this.cellDetailLoading = false;
         }
+      }
+    },
+    resetCellEditState() {
+      // Keep the edit context (table/session info) so「编辑」can be retried after a cancel or a failed save.
+      this.cellEdit = {
+        eligible: this.cellEdit.eligible,
+        checking: false,
+        active: false,
+        generating: false,
+        setNull: false,
+        binaryAsText: false,
+        sql: '',
+        columnMeta: null,
+        tableName: null,
+        tableMeta: null,
+        context: this.$_cellEditStash || null,
+        conditionCols: [],
+        findColumn: null,
+        savedContent: ''
+      };
+    },
+    // Quick checks that do not need a server round trip; the full validation runs when「编辑」is clicked.
+    checkCellEditEligibility(data) {
+      if (!data || data.error || data.mask || data.cellValue == null) {
+        return false;
+      }
+      if (!data.connected) {
+        return false;
+      }
+      const ctx = data.updateContext;
+      if (!ctx || !Array.isArray(ctx.levels) || !ctx.levels.length || !ctx.effectiveSql || !ctx.sessionId) {
+        return false;
+      }
+      if ((ctx.activeTabType || data.activeTabType) !== TAB_TYPE.QUERY) {
+        return false;
+      }
+      // Oracle-family needs TO_CLOB/HEXTORAW wrappers for LOB/binary literals; ClickHouse stores binary in String columns.
+      // Both are left to the dedicated data editor for now.
+      const dsType = data.dataSourceType || data.dsType;
+      const unsupportedDs = ['Oracle', 'ObForOracle', 'GoldenDBOracle', 'YashanDBOracle', 'KingbaseESOracle', 'ClickHouse'];
+      if (!dsType || unsupportedDs.includes(dsType)) {
+        return false;
+      }
+      return true;
+    },
+    isBinaryColumnType(type) {
+      // Types whose grid value is hex text (RowStorage/ResultFileReader render byte[] via bytes2hex).
+      // BIT/BOOLEAN/BOOL are excluded: they are displayed as True/False numbers, not hex.
+      const t = String(type || '').toUpperCase();
+      if (t === 'BIT' || t === 'BOOLEAN' || t === 'BOOL' || t.startsWith('BIT(') || /^BIT \d/.test(t)) {
+        return false;
+      }
+      return /BLOB|BINARY|VARBINARY|BYTEA|IMAGE|ROWVERSION|HIERARCHYID|\bRAW\b/.test(t);
+    },
+    isNumericLiteral(value) {
+      return value != null && value !== '' && /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(String(value));
+    },
+    // Normalize the displayed hex text (accepts 0x prefix, spaces, newlines) to bare hex; null when not valid.
+    normalizeHex(value) {
+      let s = String(value == null ? '' : value).trim();
+      if (/^0[xX]/.test(s)) {
+        s = s.slice(2);
+      }
+      s = s.replace(/\s+/g, '');
+      if (s.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(s)) {
+        return null;
+      }
+      return s.toUpperCase();
+    },
+    // Binary literal per dialect family; values come from the grid as hex text (RowStorage renders byte[] via bytes2hex).
+    binaryLiteral(hex, dsType) {
+      const ds = String(dsType || '');
+      // Pg-family bytea (GSN base64 input is not enabled by default, hex format is accepted).
+      if (/Postgre|Greenplum|Cloudberry|Redshift|Hologres|CockroachDB|GaussDB|^PolarDbX$|^pg$/i.test(ds)) {
+        return `'\\x${hex}'::bytea`;
+      }
+      if (ds === 'SQLServer' || ds === 'KingbaseESSQLServer' || ds === 'Sybase') {
+        return `0x${hex}`;
+      }
+      if (/^Db2/i.test(ds)) {
+        return `CAST('${hex}' AS BINARY(${Math.max(hex.length / 2, 1)}))`;
+      }
+      if (ds === 'Hana') {
+        return `CONVERT(VARBINARY, '${hex}', 16)`;
+      }
+      if (/Oracle/i.test(ds)) {
+        return `HEXTORAW('${hex}')`;
+      }
+      if (/^ClickHouse$/i.test(ds)) {
+        return `unhex('${hex}')`;
+      }
+      // MySQL-family and the MySQL-compatible defaults: standard x'' hex literal.
+      return hex.length ? `x'${hex}'` : `x''`;
+    },
+    // Encode UTF-8 text to an uppercase hex string, used when a binary cell is edited as text.
+    utf8TextToHex(text) {
+      const bytes = new TextEncoder().encode(text == null ? '' : String(text));
+      let hex = '';
+      for (const b of bytes) {
+        hex += b.toString(16).padStart(2, '0');
+      }
+      return hex.toUpperCase();
+    },
+    // Best-effort decode of a hex string back to UTF-8 text (invalid sequences become replacement chars).
+    hexToUtf8Text(hex) {
+      const h = this.normalizeHex(hex);
+      if (h === null || !h.length) {
+        return '';
+      }
+      const bytes = new Uint8Array(h.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(h.substr(i * 2, 2), 16);
+      }
+      try {
+        return new TextDecoder('utf-8').decode(bytes);
+      } catch (e) {
+        return '';
+      }
+    },
+    // Switch a binary cell between HEX and text input, converting the current content on the fly.
+    handleBinaryModeToggle(asText) {
+      this.cellEdit.binaryAsText = asText;
+      if (asText) {
+        this.cellDetailContent = this.hexToUtf8Text(this.cellDetailContent);
+      } else {
+        this.cellDetailContent = this.utf8TextToHex(this.cellDetailContent);
+      }
+    },
+    sqlQualifier(dsType) {
+      // MySQL-family uses backticks; the rest use double quotes, matching getQualifier's default rule.
+      const mysqlFamily = ['MySQL', 'PolarDB', 'TiDB', 'OceanBase', 'OBForMySQL', 'ObForMySQL', 'MariaDB', 'StarRocks', 'Doris', 'ADB'];
+      return mysqlFamily.includes(dsType) ? { left: '`', right: '`' } : { left: '"', right: '"' };
+    },
+    sqlLiteral(value, colType, dsType) {
+      if (value === null) {
+        return 'null';
+      }
+      if (this.isBinaryColumnType(colType)) {
+        const hex = this.normalizeHex(value);
+        if (hex === null) {
+          throw new Error(this.$t('he-xin-zi-fu-fei-fa-de-er-jin-zhi-wen-ben'));
+        }
+        return this.binaryLiteral(hex, dsType);
+      }
+      if (this.isNumericLiteral(value)) {
+        return String(value);
+      }
+      // NO_BACKSLASH_ESCAPES is assumed for MySQL-family; the preview lets the user review the statement.
+      const q = dsType === 'SQLServer' ? value.replace(/'/g, "''") : value.replace(/\\/g, '\\\\').replace(/'/g, "''");
+      return `'${q}'`;
+    },
+    async fetchFullCellValue(colNumber, rowNumber) {
+      let content = '';
+      let offset = 0;
+      let moreSize = Infinity;
+      const fetchSize = 128 * 1024;
+      let guard = 0;
+
+      while (moreSize > 0) {
+        if (++guard > 512) {
+          throw new Error(this.$t('dan-yuan-ge-nei-rong-guo-da'));
+        }
+        const res = await this.$services.dmQueryFetchResultData({
+          data: { resultId: this.selectedCellDetail.resultId, rowNumber, colNumber, offset, fetchSize }
+        });
+        if (!res.success || !res.data) {
+          throw new Error(res.message || this.$t('jia-zai-shu-ju-shi-bai'));
+        }
+        const dataValue = res.data.value || res.data;
+        if (dataValue.error) {
+          throw new Error(this.$t('jia-zai-shu-ju-shi-bai'));
+        }
+        const chunk = dataValue.value || '';
+        if (!chunk && (dataValue.moreSize || 0) > 0) {
+          throw new Error(this.$t('jia-zai-shu-ju-shi-bai'));
+        }
+        content += chunk;
+        // Offsets count characters for text values and bytes for binary values.
+        offset += fetchSize;
+        moreSize = dataValue.moreSize || 0;
+      }
+      return content;
+    },
+    async handleStartCellEdit() {
+      const ctx = this.cellEdit.context;
+      const detail = this.selectedCellDetail;
+      try {
+        if (!this.showDetailModal || !ctx) {
+          return;
+        }
+        // Matches a (possibly qualified) table identifier quoted with backticks, double quotes or brackets, or bare.
+        // The terminator is a lookahead (whitespace, ';', ')' or end-of-string) so「from t;」and「from t」still resolve the table.
+        const identifier = '(?:`[^`]+`|"[^"]+"|\\[[^\\]]+\\]|[\\w$]+)';
+        const tableMatch = ctx.effectiveSql.match(new RegExp(`\\bFROM\\s+(${identifier}(\\.${identifier})?)(?=[\\s);]|$)`, 'i'));
+        if (!tableMatch || /\bJOIN\b|\bUNION\b|\bGROUP\s+BY\b|\bDISTINCT\b|\(\s*SELECT\b/i.test(ctx.effectiveSql)) {
+          this.$Message.warning(this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
+          return;
+        }
+        const clean = (t) => (t || '').replace(/[`[\]"]+/g, '');
+        const parts = tableMatch[1].split('.').map(clean).filter(Boolean);
+        // The table is resolved from the query itself; the tab node only carries the schema path (its title is not the table).
+        const tableNameFromSql = parts[parts.length - 1];
+        if (!tableNameFromSql) {
+          this.$Message.warning(this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
+          return;
+        }
+
+        this.cellEdit.checking = true;
+        const res = await this.$services.dmBrowseRdbObjectDetail({
+          data: { levels: ctx.levels, targetName: tableNameFromSql, targetType: 'TABLE' }
+        });
+        if (!res.success || !res.data || !Array.isArray(res.data.group)) {
+          this.$Message.error(res.message || this.$t('huo-qu-biao-jie-gou-shi-bai'));
+          return;
+        }
+        const columnGroup = res.data.group.find((g) => g.type === 'RDB_COLUMN_GROUP');
+        const primaryGroup = res.data.group.find((g) => g.type === 'RDB_PRIMARY_GROUP');
+        if (!columnGroup || !columnGroup.items || !columnGroup.items.length) {
+          this.$Message.error(this.$t('huo-qu-biao-jie-gou-shi-bai'));
+          return;
+        }
+        const columns = columnGroup.items;
+        const findColumn = (name) => columns.find((c) => String(c.name).toLowerCase() === String(name).toLowerCase()) || null;
+
+        const targetColName = detail.column.property;
+        const columnMeta = findColumn(targetColName);
+        if (!columnMeta) {
+          this.$Message.warning(this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
+          return;
+        }
+        // Every result column must be traceable to the target table, otherwise the statement may hit another table.
+        const resultColumns = detail.columnList || [];
+        if (!resultColumns.length || resultColumns.some((name) => !findColumn(name))) {
+          this.$Message.warning(this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
+          return;
+        }
+
+        // Row locator must be a genuine PK/unique key. Without one the generated UPDATE could match (and overwrite) sibling rows.
+        let conditionCols = columns.filter((c) => c.attrs && c.attrs.isKey).map((c) => c.name);
+        if (!conditionCols.length) {
+          conditionCols = columns.filter((c) => c.attrs && c.attrs.isUnique).map((c) => c.name);
+        }
+        const missingLocator = conditionCols.filter((name) => !resultColumns.some((c) => String(c).toLowerCase() === String(name).toLowerCase()));
+        if (!conditionCols.length || missingLocator.length) {
+          this.$Message.warning(this.$t('que-shao-zhu-jian-huo-wei-yi-jian-wu-fa-an-quan-ding-wei'));
+          return;
+        }
+        const locateCols = conditionCols.filter((name) => name !== detail.column.property);
+        const targetCellTruncated = (detail.moreSize || 0) > 0 || !detail.complete;
+        const truncatedLocators = locateCols.filter((name) => !this.isCompleteInGrid(name));
+        if (targetCellTruncated || truncatedLocators.length) {
+          this.cellEdit.checking = false;
+          this.cellDetailLoading = true;
+          try {
+            // Fetch the full value of the edited cell and of every truncated locator column so the WHERE clause is exact.
+            if (targetCellTruncated) {
+              this.cellDetailContent = await this.fetchFullCellValue(detail.colNumber, detail.rowNumber);
+            }
+            for (const name of truncatedLocators) {
+              const colNumber = (detail.columnList || []).indexOf(name);
+              if (colNumber >= 0) {
+                const full = await this.fetchFullCellValue(colNumber, detail.rowNumber);
+                this.$_cellFullValues[name] = full;
+              }
+            }
+          } catch (err) {
+            this.$Message.error(err.message || this.$t('jia-zai-shu-ju-shi-bai'));
+            return;
+          } finally {
+            this.cellDetailLoading = false;
+            this.cellEdit.checking = true;
+          }
+          this.hasMoreData = false;
+        }
+
+        this.cellEdit.columnMeta = columnMeta;
+        this.cellEdit.tableName = tableNameFromSql;
+        this.cellEdit.tableMeta = { columns, hasPk: !!(primaryGroup && primaryGroup.items && primaryGroup.items.length) };
+        this.cellEdit.conditionCols = conditionCols;
+        this.cellEdit.findColumn = findColumn;
+        this.cellEdit.savedContent = this.cellDetailContent;
+        this.cellEdit.active = true;
+      } catch (err) {
+        appLogger.error('cell edit preparation failed', err);
+        this.$Message.error(err.message || this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
+      } finally {
+        this.cellEdit.checking = false;
+      }
+    },
+    // Whether the grid sample of a condition column is complete (not truncated), based on its raw cell meta.
+    isCompleteInGrid(colName) {
+      const detail = this.selectedCellDetail;
+      if (colName === detail.column.property) {
+        // The edited cell itself is fully loaded into cellDetailContent before editing starts.
+        return true;
+      }
+      const idx = (detail.columnList || []).indexOf(colName);
+      if (idx < 0) {
+        return false;
+      }
+      const cell = Array.isArray(detail.rowRaw) ? detail.rowRaw[idx] : null;
+      // Missing raw meta (unknown receive mode) is treated as complete; WHERE fallbacks still use IS NULL-safe literals.
+      if (!cell || typeof cell !== 'object') {
+        return true;
+      }
+      return cell.complete !== undefined ? cell.complete : true;
+    },
+    // Original (pre-edit) displayed value of a row column, as kept when the modal was opened.
+    cellDetailValue(colName) {
+      // Truncated locator columns are fully fetched (characters) before editing starts.
+      if (this.$_cellFullValues && colName in this.$_cellFullValues) {
+        return this.$_cellFullValues[colName];
+      }
+      const detail = this.selectedCellDetail;
+      const idx = (detail.columnList || []).indexOf(colName);
+      const cell = idx >= 0 && Array.isArray(detail.rowRaw) ? detail.rowRaw[idx] : undefined;
+      if (cell !== undefined && cell !== null && typeof cell === 'object' && 'value' in cell) {
+        return cell.value == null ? null : cell.value;
+      }
+      const rowValue = (detail.row || {})[colName];
+      return rowValue === undefined ? null : rowValue;
+    },
+    handleCancelCellEdit() {
+      this.cellDetailContent = this.cellEdit.savedContent;
+      this.resetCellEditState();
+    },
+    // Build the UPDATE statement: single-column SET plus a PK/unique row locator WHERE.
+    buildCellUpdateSql() {
+      const detail = this.selectedCellDetail;
+      const ctx = this.cellEdit.context;
+      const dsType = detail.dataSourceType || detail.dsType;
+      if (!ctx || !this.cellEdit.tableName) {
+        throw new Error(this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
+      }
+      const qualifier = this.sqlQualifier(dsType);
+      const quoteName = (name) =>
+        `${qualifier.left}${String(name)
+          .split('.')
+          .map((p) => p.replace(new RegExp(qualifier.left, 'g'), ''))
+          .join(`${qualifier.right}.${qualifier.left}`)}${qualifier.right}`;
+      const targetCol = detail.column.property;
+      const locateCols = (this.cellEdit.conditionCols || []).filter((c) => c !== targetCol);
+      if (!locateCols.length) {
+        throw new Error(this.$t('que-shao-zhu-jian-huo-wei-yi-jian-wu-fa-an-quan-ding-wei'));
+      }
+      for (const col of locateCols) {
+        if (!this.isCompleteInGrid(col) && !(this.$_cellFullValues && col in this.$_cellFullValues)) {
+          throw new Error(this.$t('dan-yuan-ge-nei-rong-guo-da'));
+        }
+      }
+      const targetMeta = this.cellEdit.columnMeta;
+      let valueExpr;
+      if (this.cellEdit.setNull) {
+        valueExpr = 'null';
+      } else if (targetMeta && this.isBinaryColumnType(targetMeta.dbType) && this.cellEdit.binaryAsText) {
+        // Text input mode: store the UTF-8 bytes of the typed text as the binary value.
+        valueExpr = this.binaryLiteral(this.utf8TextToHex(this.cellDetailContent), dsType);
+      } else {
+        valueExpr = this.sqlLiteral(this.cellDetailContent, targetMeta ? targetMeta.dbType : undefined, dsType);
+      }
+      const where = locateCols
+        .map((col) => {
+          const meta = this.cellEdit.findColumn ? this.cellEdit.findColumn(col) : null;
+          const raw = this.cellDetailValue(col);
+          // Empty displayed text is ambiguous (NULL vs ''); locate as IS NULL since `col = null` never matches.
+          if (raw === null || raw === '') {
+            return `${quoteName(col)} is null`;
+          }
+          return `${quoteName(col)}=${this.sqlLiteral(raw, meta ? meta.dbType : undefined, dsType)}`;
+        })
+        .join(' and ');
+      return `update ${quoteName(this.cellEdit.tableName)} set ${quoteName(targetCol)}=${valueExpr} where ${where}`;
+    },
+    // Save: generate the UPDATE, preview it for confirmation, then execute through the SQL window WebSocket channel.
+    handleGenerateUpdateSql() {
+      if (this.cellEdit.generating) {
+        return;
+      }
+      let sql = '';
+      try {
+        sql = this.buildCellUpdateSql();
+      } catch (err) {
+        this.$Message.error(err.message || this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
+        return;
+      }
+      this.cellEdit.sql = sql;
+      this.$Modal.confirm({
+        title: this.$t('ti-shi'),
+        content: this.$t('que-ren-zhi-xing-geng-xin-tishi', [sql]),
+        okText: this.$t('que-ding'),
+        cancelText: this.$t('qu-xiao'),
+        onOk: () => {
+          const ctx = this.cellEdit.context;
+          if (!ctx || !ctx.sessionId) {
+            this.$Message.warning(this.$t('lian-jie-yi-duan-kai'));
+            return;
+          }
+          this.cellEdit.generating = true;
+          if (this.cellUpdateTimeout) {
+            clearTimeout(this.cellUpdateTimeout);
+          }
+          this.cellUpdateTimeout = setTimeout(() => {
+            if (this.cellEdit.generating) {
+              this.cellEdit.generating = false;
+              this.$Message.error(this.$t('zhi-xing-chao-shi'));
+            }
+          }, 60000);
+          this.$bus.emit(EVENT_BUS_NAME_LIST.EXECUTE_CELL_UPDATE, { sql, sessionId: ctx.sessionId });
+        }
+      });
+    },
+    // Outcome of the UPDATE executed by the SQL window over WebSocket.
+    handleCellUpdateOutcome({ sessionId, success, error } = {}) {
+      if (!this.cellEdit.generating) {
+        return;
+      }
+      const ctx = this.cellEdit.context;
+      if (!ctx || (sessionId && ctx.sessionId && sessionId !== ctx.sessionId)) {
+        return;
+      }
+      this.cellEdit.generating = false;
+      if (this.cellUpdateTimeout) {
+        clearTimeout(this.cellUpdateTimeout);
+        this.cellUpdateTimeout = null;
+      }
+      if (success) {
+        this.$Message.success(this.$t('geng-xin-cheng-gong'));
+        this.resetCellEditState();
+      } else {
+        this.$Message.error(error || this.$t('zhi-xing-shi-bai'));
       }
     },
     handleGoBackHome() {
@@ -566,6 +1101,12 @@ export default {
 .cell-detail {
   position: relative;
 
+  .cell-decode-hint {
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+  }
+
   .cell-detail-loading {
     position: absolute;
     top: 50%;
@@ -585,6 +1126,40 @@ export default {
   margin-top: 10px;
   max-height: 400px;
   overflow: auto;
+
+  .cell-edit-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+
+    .cell-edit-hint {
+      font-size: 12px;
+      color: var(--text-secondary, #999);
+    }
+  }
+
+  .cell-edit-sql-preview {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-color, #e5e6eb);
+    border-radius: 4px;
+    background: #f7f8fa;
+
+    .cell-edit-sql-label {
+      font-size: 12px;
+      color: var(--text-secondary, #999);
+      margin-bottom: 4px;
+    }
+
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-all;
+      font-family: monospace;
+      font-size: 12px;
+    }
+  }
 }
 
 .renew-license-modal {

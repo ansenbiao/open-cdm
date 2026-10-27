@@ -264,6 +264,8 @@ export default {
     return {
       RULE_WARN_LEVEL,
       currentSql: '',
+      // Pending UPDATE statements executed from the cell detail modal, keyed by requestId.
+      pendingCellUpdates: {},
       position: {},
       currentWarnLevel: '',
       noPassedRuleList: [],
@@ -294,12 +296,14 @@ export default {
     );
     this.aiResizeObserver.observe(this.$el);
     this.$bus.on('showNoPassedRuleListModal', (index) => this.handleShowUnPassedRuleListModal(index));
+    this.$bus.on(EVENT_BUS_NAME_LIST.EXECUTE_CELL_UPDATE, this.handleExecuteCellUpdate);
   },
   beforeUnmount() {
     this.aiSelectionDisposables.forEach((listener) => listener.dispose());
     this.finishAiResize();
     this.aiResizeObserver?.disconnect();
     this.$bus.off('showNoPassedRuleListModal');
+    this.$bus.off(EVENT_BUS_NAME_LIST.EXECUTE_CELL_UPDATE, this.handleExecuteCellUpdate);
   },
   methods: {
     startAiResize(event, axis) {
@@ -843,9 +847,85 @@ export default {
       return list;
     },
     onclose() {},
+    // Executes a single-cell UPDATE generated in the cell detail modal through the current tab's query session.
+    handleExecuteCellUpdate({ sql, sessionId } = {}) {
+      if (!sql || !sessionId || sessionId !== this.tab.sessionId) {
+        return;
+      }
+      if (!this.tab.connected) {
+        this.$bus.emit(EVENT_BUS_NAME_LIST.CELL_UPDATE_OUTCOME, { sessionId, success: false, error: this.$t('lian-jie-yi-duan-kai') });
+        return;
+      }
+      const requestId = nanoid();
+      this.pendingCellUpdates[requestId] = { startedAt: Date.now(), errorSeen: null };
+      sendWebSocket(
+        {
+          type: WS_TYPE.WS_REQ_QUERY,
+          object: {
+            force: false,
+            requestId,
+            queryString: sql,
+            queryArgs: [],
+            sessionId,
+            queryType: WS_REQ_QUERY_TYPE.REQUEST_QUERY,
+            levels: this.browseGenLevelsData(this.tab.node),
+            rdbAutoCommit: this.tab.autoCommit,
+            rdbReadOnly: this.tab.readOnly,
+            rdbIsolation: this.tab.isolation
+          }
+        },
+        {
+          open: this.onopen,
+          message: this.onmessage,
+          error: this.onerror,
+          close: this.onclose
+        }
+      );
+    },
+    // Correlates WS responses of a pending cell UPDATE and reports the outcome back to the detail modal.
+    handleCellUpdateWsMessage(queryData, requestId) {
+      const pending = this.pendingCellUpdates[requestId];
+      if (!pending) {
+        return;
+      }
+      const type = queryData.object.resultType;
+      if (type === 'Message' && queryData.object.entities && queryData.object.entities.length) {
+        queryData.object.entities.forEach((entity) => {
+          if (entity.level === 'Error' && !pending.errorSeen) {
+            pending.errorSeen = entity.message || '';
+          }
+        });
+        return;
+      }
+      if (type === 'RuleCheck') {
+        // Statement was blocked by the security rules before execution.
+        this.finishCellUpdate(requestId, { success: false, error: this.$t('an-quan-gui-ze-jin-zhi-zhi-xing') });
+        return;
+      }
+      if (type === 'Done') {
+        this.finishCellUpdate(requestId, { success: !pending.errorSeen, error: pending.errorSeen || '' });
+      }
+    },
+    finishCellUpdate(requestId, outcome) {
+      const pending = this.pendingCellUpdates[requestId];
+      if (!pending) {
+        return;
+      }
+      delete this.pendingCellUpdates[requestId];
+      this.$bus.emit(EVENT_BUS_NAME_LIST.CELL_UPDATE_OUTCOME, { sessionId: this.tab.sessionId, ...outcome });
+    },
     onmessage(data) {
       try {
         const queryData = JSON.parse(data);
+        // Cell-UPDATE correlation must run even when the response belongs to a non-active tab.
+        if (
+          queryData.type === WS_TYPE.WS_RES_QUERY &&
+          queryData.object &&
+          queryData.object.requestId &&
+          this.pendingCellUpdates[queryData.object.requestId]
+        ) {
+          this.handleCellUpdateWsMessage(queryData, queryData.object.requestId);
+        }
         let currentTab = this.tab;
         if (this.tab.sessionId !== queryData.object.sessionId) {
           currentTab = null;
