@@ -114,6 +114,7 @@
         </template>
       </template>
     </CCModal>
+    <ImportDataModal />
     <CCModal v-model="showInactiveModal" :title="$t('cuo-wu')" :closable="false" :mask-closable="false">
       {{ inactiveMsg }}
       <template #footer>
@@ -147,6 +148,7 @@ import appLogger from '@/utils/logger';
 import { mapGetters, mapState } from 'vuex';
 import AppSidebar from '@/components/layout/AppSidebar';
 import ReadOnlyEditor from '@/components/editor/ReadOnlyEditor.vue';
+import ImportDataModal from '@/views/sql/components/ImportDataModal.vue';
 import AppBrandLogo from '@/components/layout/AppBrandLogo';
 import AppContentHeader from '@/components/layout/AppContentHeader';
 import AppUserActions from '@/components/layout/AppUserActions';
@@ -159,6 +161,17 @@ import dayjs from 'dayjs';
 import fecha from 'fecha';
 import { EVENT_BUS_NAME_LIST } from '@/utils/eventBusName';
 import { decodeHexToText } from '@/utils/cellValueDisplay';
+import {
+  isBinaryColumnType as utilIsBinaryColumnType,
+  isNumericLiteral as utilIsNumericLiteral,
+  normalizeHex as utilNormalizeHex,
+  binaryLiteral as utilBinaryLiteral,
+  utf8TextToHex as utilUtf8TextToHex,
+  hexToUtf8Text as utilHexToUtf8Text,
+  sqlQualifier as utilSqlQualifier,
+  quoteName as utilQuoteName,
+  sqlLiteral as utilSqlLiteral
+} from '@/utils/sqlLiteral';
 import { TAB_TYPE } from '@/const';
 import { resolveWorkbenchFallbackPath, resolveWorkbenchRoute } from '@/utils/workbenchRoute';
 
@@ -166,6 +179,7 @@ export default {
   name: 'Home',
   components: {
     ReadOnlyEditor,
+    ImportDataModal,
     DmWaterMark,
     AppSidebar,
     AppBrandLogo,
@@ -518,78 +532,26 @@ export default {
       return true;
     },
     isBinaryColumnType(type) {
-      // Types whose grid value is hex text (RowStorage/ResultFileReader render byte[] via bytes2hex).
-      // BIT/BOOLEAN/BOOL are excluded: they are displayed as True/False numbers, not hex.
-      const t = String(type || '').toUpperCase();
-      if (t === 'BIT' || t === 'BOOLEAN' || t === 'BOOL' || t.startsWith('BIT(') || /^BIT \d/.test(t)) {
-        return false;
-      }
-      return /BLOB|BINARY|VARBINARY|BYTEA|IMAGE|ROWVERSION|HIERARCHYID|\bRAW\b/.test(t);
+      return utilIsBinaryColumnType(type);
     },
     isNumericLiteral(value) {
-      return value != null && value !== '' && /^-?\d+(\.\d+)?([eE][-+]?\d+)?$/.test(String(value));
+      return utilIsNumericLiteral(value);
     },
     // Normalize the displayed hex text (accepts 0x prefix, spaces, newlines) to bare hex; null when not valid.
     normalizeHex(value) {
-      let s = String(value == null ? '' : value).trim();
-      if (/^0[xX]/.test(s)) {
-        s = s.slice(2);
-      }
-      s = s.replace(/\s+/g, '');
-      if (s.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(s)) {
-        return null;
-      }
-      return s.toUpperCase();
+      return utilNormalizeHex(value);
     },
     // Binary literal per dialect family; values come from the grid as hex text (RowStorage renders byte[] via bytes2hex).
     binaryLiteral(hex, dsType) {
-      const ds = String(dsType || '');
-      // Pg-family bytea (GSN base64 input is not enabled by default, hex format is accepted).
-      if (/Postgre|Greenplum|Cloudberry|Redshift|Hologres|CockroachDB|GaussDB|^PolarDbX$|^pg$/i.test(ds)) {
-        return `'\\x${hex}'::bytea`;
-      }
-      if (ds === 'SQLServer' || ds === 'KingbaseESSQLServer' || ds === 'Sybase') {
-        return `0x${hex}`;
-      }
-      if (/^Db2/i.test(ds)) {
-        return `CAST('${hex}' AS BINARY(${Math.max(hex.length / 2, 1)}))`;
-      }
-      if (ds === 'Hana') {
-        return `CONVERT(VARBINARY, '${hex}', 16)`;
-      }
-      if (/Oracle/i.test(ds)) {
-        return `HEXTORAW('${hex}')`;
-      }
-      if (/^ClickHouse$/i.test(ds)) {
-        return `unhex('${hex}')`;
-      }
-      // MySQL-family and the MySQL-compatible defaults: standard x'' hex literal.
-      return hex.length ? `x'${hex}'` : `x''`;
+      return utilBinaryLiteral(hex, dsType);
     },
     // Encode UTF-8 text to an uppercase hex string, used when a binary cell is edited as text.
     utf8TextToHex(text) {
-      const bytes = new TextEncoder().encode(text == null ? '' : String(text));
-      let hex = '';
-      for (const b of bytes) {
-        hex += b.toString(16).padStart(2, '0');
-      }
-      return hex.toUpperCase();
+      return utilUtf8TextToHex(text);
     },
     // Best-effort decode of a hex string back to UTF-8 text (invalid sequences become replacement chars).
     hexToUtf8Text(hex) {
-      const h = this.normalizeHex(hex);
-      if (h === null || !h.length) {
-        return '';
-      }
-      const bytes = new Uint8Array(h.length / 2);
-      for (let i = 0; i < bytes.length; i++) {
-        bytes[i] = parseInt(h.substr(i * 2, 2), 16);
-      }
-      try {
-        return new TextDecoder('utf-8').decode(bytes);
-      } catch (e) {
-        return '';
-      }
+      return utilHexToUtf8Text(hex);
     },
     // Switch a binary cell between HEX and text input, converting the current content on the fly.
     handleBinaryModeToggle(asText) {
@@ -601,27 +563,10 @@ export default {
       }
     },
     sqlQualifier(dsType) {
-      // MySQL-family uses backticks; the rest use double quotes, matching getQualifier's default rule.
-      const mysqlFamily = ['MySQL', 'PolarDB', 'TiDB', 'OceanBase', 'OBForMySQL', 'ObForMySQL', 'MariaDB', 'StarRocks', 'Doris', 'ADB'];
-      return mysqlFamily.includes(dsType) ? { left: '`', right: '`' } : { left: '"', right: '"' };
+      return utilSqlQualifier(dsType);
     },
     sqlLiteral(value, colType, dsType) {
-      if (value === null) {
-        return 'null';
-      }
-      if (this.isBinaryColumnType(colType)) {
-        const hex = this.normalizeHex(value);
-        if (hex === null) {
-          throw new Error(this.$t('he-xin-zi-fu-fei-fa-de-er-jin-zhi-wen-ben'));
-        }
-        return this.binaryLiteral(hex, dsType);
-      }
-      if (this.isNumericLiteral(value)) {
-        return String(value);
-      }
-      // NO_BACKSLASH_ESCAPES is assumed for MySQL-family; the preview lets the user review the statement.
-      const q = dsType === 'SQLServer' ? value.replace(/'/g, "''") : value.replace(/\\/g, '\\\\').replace(/'/g, "''");
-      return `'${q}'`;
+      return utilSqlLiteral(value, colType, dsType, { invalidHexMessage: this.$t('he-xin-zi-fu-fei-fa-de-er-jin-zhi-wen-ben') });
     },
     async fetchFullCellValue(colNumber, rowNumber) {
       let content = '';
@@ -807,11 +752,7 @@ export default {
         throw new Error(this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
       }
       const qualifier = this.sqlQualifier(dsType);
-      const quoteName = (name) =>
-        `${qualifier.left}${String(name)
-          .split('.')
-          .map((p) => p.replace(new RegExp(qualifier.left, 'g'), ''))
-          .join(`${qualifier.right}.${qualifier.left}`)}${qualifier.right}`;
+      const quoteName = (name) => utilQuoteName(name, qualifier);
       const targetCol = detail.column.property;
       const locateCols = (this.cellEdit.conditionCols || []).filter((c) => c !== targetCol);
       if (!locateCols.length) {

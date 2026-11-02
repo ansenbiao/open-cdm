@@ -57,6 +57,9 @@
               @script-deleted="$emit('script-deleted', $event)"
               @script-renamed="$emit('script-renamed', $event)"
             />
+            <Button class="sql-import-trigger" size="small" :aria-label="$t('dao-ru')" :title="$t('dao-ru')" @click.stop="handleOpenImport">
+              <UploadOutlined />
+            </Button>
           </template>
         </Editor>
         <Transition name="sql-editor-loading">
@@ -156,6 +159,7 @@
 <script>
 import appLogger from '@/utils/logger';
 import { markRaw } from 'vue';
+import { UploadOutlined } from '@ant-design/icons-vue';
 import AppPageTabs from '@/components/layout/AppPageTabs.vue';
 import AiSqlPanel from '@/views/ai/components/AiSqlPanel.vue';
 import { aiErrorMessage } from '@/services/ai';
@@ -178,6 +182,28 @@ import SqlScriptPopover from '@/views/sql/components/SqlScriptPopover.vue';
 import CommandExamples from '@/views/sql/components/CommandExamples.vue';
 import SqlLoadingSkeleton from '@/views/sql/components/SqlLoadingSkeleton.vue';
 
+// Import wizard: TX control requests are quick, single INSERT batches may take longer on large tables.
+const IMPORT_TX_TIMEOUT = 30000;
+const IMPORT_BATCH_TIMEOUT = 5 * 60 * 1000;
+
+// The wizard prefills its target table from the active result set; joins, unions and sub-queries are ambiguous.
+const SQL_SOURCE_IDENTIFIER = '(?:`[^`]+`|"[^"]+"|\\[[^\\]]+\\]|[\\w$]+)';
+const SQL_SOURCE_TABLE = new RegExp(`\\bFROM\\s+(${SQL_SOURCE_IDENTIFIER}(\\.${SQL_SOURCE_IDENTIFIER})?)(?=[\\s);]|$)`, 'i');
+const SQL_MULTI_SOURCE = /\bJOIN\b|\bUNION\b|\(\s*SELECT\b/i;
+
+function tableFromSql(sql) {
+  const text = String(sql || '');
+  const match = text.match(SQL_SOURCE_TABLE);
+  if (!match || SQL_MULTI_SOURCE.test(text)) {
+    return '';
+  }
+  const parts = match[1]
+    .split('.')
+    .map((part) => part.replace(/[`[\]"]+/g, ''))
+    .filter(Boolean);
+  return parts[parts.length - 1] || '';
+}
+
 export default {
   name: 'SqlViewer',
   components: {
@@ -187,7 +213,8 @@ export default {
     CommandExamples,
     AppPageTabs,
     AiSqlPanel,
-    SqlLoadingSkeleton
+    SqlLoadingSkeleton,
+    UploadOutlined
   },
   emits: ['open-script', 'script-deleted', 'script-renamed', 'switch-tab', 'workspace-connection-error', 'workspace-connection-success'],
   props: {
@@ -266,6 +293,10 @@ export default {
       currentSql: '',
       // Pending UPDATE statements executed from the cell detail modal, keyed by requestId.
       pendingCellUpdates: {},
+      // Pending import requests (INSERT batches + TX control) from the import wizard, keyed by requestId.
+      pendingImport: {},
+      importRunning: false,
+      importCancel: false,
       position: {},
       currentWarnLevel: '',
       noPassedRuleList: [],
@@ -297,6 +328,8 @@ export default {
     this.aiResizeObserver.observe(this.$el);
     this.$bus.on('showNoPassedRuleListModal', (index) => this.handleShowUnPassedRuleListModal(index));
     this.$bus.on(EVENT_BUS_NAME_LIST.EXECUTE_CELL_UPDATE, this.handleExecuteCellUpdate);
+    this.$bus.on(EVENT_BUS_NAME_LIST.EXECUTE_IMPORT, this.handleExecuteImport);
+    this.$bus.on(EVENT_BUS_NAME_LIST.CANCEL_IMPORT, this.handleCancelImport);
   },
   beforeUnmount() {
     this.aiSelectionDisposables.forEach((listener) => listener.dispose());
@@ -304,6 +337,8 @@ export default {
     this.aiResizeObserver?.disconnect();
     this.$bus.off('showNoPassedRuleListModal');
     this.$bus.off(EVENT_BUS_NAME_LIST.EXECUTE_CELL_UPDATE, this.handleExecuteCellUpdate);
+    this.$bus.off(EVENT_BUS_NAME_LIST.EXECUTE_IMPORT, this.handleExecuteImport);
+    this.$bus.off(EVENT_BUS_NAME_LIST.CANCEL_IMPORT, this.handleCancelImport);
   },
   methods: {
     startAiResize(event, axis) {
@@ -882,12 +917,9 @@ export default {
         }
       );
     },
-    // Correlates WS responses of a pending cell UPDATE and reports the outcome back to the detail modal.
-    handleCellUpdateWsMessage(queryData, requestId) {
-      const pending = this.pendingCellUpdates[requestId];
-      if (!pending) {
-        return;
-      }
+    // Interprets a WS response for a pending statement: collects Error messages, and returns the final outcome
+    // on Done/RuleCheck (otherwise null). Shared by the cell-edit UPDATE and the import INSERT batches.
+    interpretQueryOutcome(queryData, pending) {
       const type = queryData.object.resultType;
       if (type === 'Message' && queryData.object.entities && queryData.object.entities.length) {
         queryData.object.entities.forEach((entity) => {
@@ -895,15 +927,26 @@ export default {
             pending.errorSeen = entity.message || '';
           }
         });
-        return;
+        return null;
       }
       if (type === 'RuleCheck') {
         // Statement was blocked by the security rules before execution.
-        this.finishCellUpdate(requestId, { success: false, error: this.$t('an-quan-gui-ze-jin-zhi-zhi-xing') });
-        return;
+        return { success: false, error: this.$t('an-quan-gui-ze-jin-zhi-zhi-xing') };
       }
       if (type === 'Done') {
-        this.finishCellUpdate(requestId, { success: !pending.errorSeen, error: pending.errorSeen || '' });
+        return { success: !pending.errorSeen, error: pending.errorSeen || '' };
+      }
+      return null;
+    },
+    // Correlates WS responses of a pending cell UPDATE and reports the outcome back to the detail modal.
+    handleCellUpdateWsMessage(queryData, requestId) {
+      const pending = this.pendingCellUpdates[requestId];
+      if (!pending) {
+        return;
+      }
+      const outcome = this.interpretQueryOutcome(queryData, pending);
+      if (outcome) {
+        this.finishCellUpdate(requestId, outcome);
       }
     },
     finishCellUpdate(requestId, outcome) {
@@ -913,6 +956,203 @@ export default {
       }
       delete this.pendingCellUpdates[requestId];
       this.$bus.emit(EVENT_BUS_NAME_LIST.CELL_UPDATE_OUTCOME, { sessionId: this.tab.sessionId, ...outcome });
+    },
+    // Resolves the table behind the active result set so the wizard can prefill it; the wizard still lets users edit it.
+    resolveImportTable() {
+      const result = this.tab.result || {};
+      const list = Array.isArray(result.list) ? result.list : [];
+      const active = list.find((item) => item.resultId === result.active);
+      for (const sql of [active && active.querySql, this.getEditorContent()]) {
+        const table = tableFromSql(sql);
+        if (table) {
+          return table;
+        }
+      }
+      const node = this.tab.node;
+      return node && this.tab.leafType === 'TABLE' ? node.title || '' : '';
+    },
+    // Opens the import wizard for this tab's connection (SqlViewer owns the session, home mounts the modal).
+    handleOpenImport() {
+      if (!this.tab.connected || !this.tab.sessionId) {
+        this.$Message.warning(this.$t('sql-connection-disconnected'));
+        return;
+      }
+      if (this.tab.readOnly) {
+        this.$Message.warning(this.$t('zhi-du-hui-hua-bu-zhi-chi-dao-ru'));
+        return;
+      }
+      const node = this.tab.node || null;
+      this.$bus.emit(EVENT_BUS_NAME_LIST.SHOW_IMPORT_MODAL, {
+        levels: node ? this.browseGenLevelsData(node) : null,
+        sessionId: this.tab.sessionId,
+        dsType: this.tab.dsType,
+        dataSourceType: this.tab.dataSourceType || this.tab.dsType,
+        defaultTable: this.resolveImportTable(),
+        node
+      });
+    },
+    // Sends one correlated request for the import wizard (INSERT batch or TX control) and resolves on Done/RuleCheck/timeout.
+    importRequest(queryString, rdbAutoCommit, queryType = WS_REQ_QUERY_TYPE.REQUEST_QUERY, timeout = IMPORT_BATCH_TIMEOUT) {
+      const requestId = nanoid();
+      const object = {
+        requestId,
+        sessionId: this.tab.sessionId,
+        queryType,
+        levels: this.browseGenLevelsData(this.tab.node),
+        rdbAutoCommit,
+        rdbReadOnly: this.tab.readOnly,
+        rdbIsolation: this.tab.isolation
+      };
+      if (queryType === WS_REQ_QUERY_TYPE.REQUEST_QUERY) {
+        object.force = false;
+        object.queryString = queryString;
+        object.queryArgs = [];
+      }
+      return new Promise((resolve) => {
+        const pending = { resolve, errorSeen: null };
+        pending.timer = setTimeout(() => {
+          this.finishImportRequest(requestId, { success: false, error: this.$t('dao-ru-qing-qiu-chao-shi') });
+        }, timeout);
+        this.pendingImport[requestId] = pending;
+        sendWebSocket(
+          { type: WS_TYPE.WS_REQ_QUERY, object },
+          { open: this.onopen, message: this.onmessage, error: this.onerror, close: this.onclose }
+        );
+      });
+    },
+    // Correlates WS responses of a pending import request and resolves the awaiting batch step.
+    resolveImport(requestId, queryData) {
+      const pending = this.pendingImport[requestId];
+      if (!pending) {
+        return;
+      }
+      const outcome = this.interpretQueryOutcome(queryData, pending);
+      if (outcome) {
+        this.finishImportRequest(requestId, outcome);
+      }
+    },
+    finishImportRequest(requestId, outcome) {
+      const pending = this.pendingImport[requestId];
+      if (!pending) {
+        return;
+      }
+      delete this.pendingImport[requestId];
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+      }
+      pending.resolve(outcome);
+    },
+    // Runs the import wizard's INSERT batches: single transaction (rollback on any failure) or best-effort per batch.
+    async handleExecuteImport({ batches, batchRows, sessionId, useTransaction, totalRows } = {}) {
+      if (!Array.isArray(batches) || !batches.length) {
+        return;
+      }
+      if (!sessionId || sessionId !== this.tab.sessionId || !this.tab.connected) {
+        this.$bus.emit(EVENT_BUS_NAME_LIST.IMPORT_OUTCOME, { sessionId, success: false, error: this.$t('lian-jie-yi-duan-kai') });
+        return;
+      }
+      if (this.importRunning) {
+        return;
+      }
+      this.importRunning = true;
+      this.importCancel = false;
+
+      const origAutoCommit = this.tab.autoCommit;
+      const total = batches.length;
+      const rowsPerBatch = Array.isArray(batchRows) && batchRows.length === total ? batchRows : batches.map(() => 0);
+      const rdbAutoCommit = useTransaction ? false : origAutoCommit;
+      let done = 0;
+      let importedRows = 0;
+
+      const emitProgress = () => this.$bus.emit(EVENT_BUS_NAME_LIST.IMPORT_PROGRESS, { sessionId, done, total, rows: importedRows });
+      const finish = (outcome) => {
+        if (!this.importRunning) {
+          return;
+        }
+        this.importRunning = false;
+        this.importCancel = false;
+        this.$bus.emit(EVENT_BUS_NAME_LIST.IMPORT_OUTCOME, { sessionId, ...outcome });
+      };
+      // Rolls back the whole import (transactional only) and restores the user's original auto-commit setting.
+      const abort = async () => {
+        if (!useTransaction) {
+          return;
+        }
+        await this.importRequest(null, false, WS_REQ_QUERY_TYPE.TX_ROLLBACK, IMPORT_TX_TIMEOUT);
+        if (origAutoCommit) {
+          await this.importRequest(null, true, WS_REQ_QUERY_TYPE.TX_STATUS, IMPORT_TX_TIMEOUT);
+        }
+      };
+
+      // Switch the shared session into manual mode so every batch lands in one transaction.
+      if (useTransaction && origAutoCommit) {
+        const res = await this.importRequest(null, false, WS_REQ_QUERY_TYPE.TX_STATUS, IMPORT_TX_TIMEOUT);
+        if (!res.success) {
+          finish({ success: false, error: res.error || this.$t('dao-ru-shi-bai') });
+          return;
+        }
+      }
+
+      for (let i = 0; i < total; i++) {
+        if (this.importCancel) {
+          await abort();
+          finish({ success: false, cancelled: true, error: this.$t('yi-qu-xiao'), rows: importedRows });
+          return;
+        }
+        const res = await this.importRequest(batches[i], rdbAutoCommit);
+        if (this.importCancel) {
+          await abort();
+          finish({ success: false, cancelled: true, error: this.$t('yi-qu-xiao'), rows: importedRows });
+          return;
+        }
+        if (!res.success) {
+          await abort();
+          finish({ success: false, error: res.error || this.$t('dao-ru-shi-bai'), failedBatch: i, rows: importedRows });
+          return;
+        }
+        done++;
+        importedRows += rowsPerBatch[i] || 0;
+        emitProgress();
+      }
+
+      if (useTransaction) {
+        const res = await this.importRequest(null, false, WS_REQ_QUERY_TYPE.TX_COMMIT, IMPORT_TX_TIMEOUT);
+        if (!res.success) {
+          // Commit failed: the transaction is still open on the server, roll it back to be safe.
+          await this.importRequest(null, false, WS_REQ_QUERY_TYPE.TX_ROLLBACK, IMPORT_TX_TIMEOUT);
+          if (origAutoCommit) {
+            await this.importRequest(null, true, WS_REQ_QUERY_TYPE.TX_STATUS, IMPORT_TX_TIMEOUT);
+          }
+          finish({ success: false, error: res.error || this.$t('dao-ru-shi-bai'), failedBatch: total - 1, rows: importedRows });
+          return;
+        }
+        if (origAutoCommit) {
+          await this.importRequest(null, true, WS_REQ_QUERY_TYPE.TX_STATUS, IMPORT_TX_TIMEOUT);
+        }
+      }
+
+      finish({ success: true, rows: importedRows || totalRows || 0 });
+    },
+    // Requests cancellation of a running import; the executor rolls back once the in-flight batch returns.
+    handleCancelImport({ sessionId } = {}) {
+      if (!this.importRunning || (sessionId && sessionId !== this.tab.sessionId)) {
+        return;
+      }
+      this.importCancel = true;
+      sendWebSocket(
+        {
+          type: WS_TYPE.WS_REQ_QUERY,
+          object: {
+            sessionId: this.tab.sessionId,
+            queryType: WS_REQ_QUERY_TYPE.CANCEL_QUERY,
+            levels: this.browseGenLevelsData(this.tab.node),
+            rdbAutoCommit: this.tab.autoCommit,
+            rdbReadOnly: this.tab.readOnly,
+            rdbIsolation: this.tab.isolation
+          }
+        },
+        { message: this.onmessage }
+      );
     },
     onmessage(data) {
       try {
@@ -925,6 +1165,21 @@ export default {
           this.pendingCellUpdates[queryData.object.requestId]
         ) {
           this.handleCellUpdateWsMessage(queryData, queryData.object.requestId);
+        }
+        // Import batches/ TX control are silent: only drive the wizard and keep the tab tx state in sync.
+        if (
+          queryData.type === WS_TYPE.WS_RES_QUERY &&
+          queryData.object &&
+          queryData.object.requestId &&
+          this.pendingImport[queryData.object.requestId]
+        ) {
+          if (queryData.object.resultType === 'Status') {
+            this.tab.autoCommit = queryData.object.rdbAutoCommit;
+            this.tab.readOnly = queryData.object.rdbReadOnly;
+            this.tab.isolation = queryData.object.rdbTxIsolation;
+          }
+          this.resolveImport(queryData.object.requestId, queryData);
+          return;
         }
         let currentTab = this.tab;
         if (this.tab.sessionId !== queryData.object.sessionId) {
@@ -1470,5 +1725,26 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+// Import trigger sits in the editor toolbar next to the SQL favorites button.
+.sql-import-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  padding: 0 8px;
+  line-height: 1;
+
+  .anticon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+
+    svg {
+      display: block;
+    }
+  }
 }
 </style>

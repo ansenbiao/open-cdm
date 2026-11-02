@@ -4,6 +4,7 @@ import 'ant-design-vue/dist/reset.css';
 // Include only the components you want as needed
 import {
   Alert,
+  AutoComplete,
   Breadcrumb,
   Button,
   Checkbox,
@@ -39,6 +40,7 @@ import {
 export default {
   install(app) {
     app.use(Alert);
+    app.use(AutoComplete);
     app.use(Breadcrumb);
     app.use(Button);
     app.use(Checkbox);
