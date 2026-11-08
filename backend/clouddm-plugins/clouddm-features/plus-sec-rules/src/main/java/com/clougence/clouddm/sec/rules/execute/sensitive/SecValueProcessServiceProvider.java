@@ -101,7 +101,8 @@ public class SecValueProcessServiceProvider implements ValueProcessService {
     private List<String> processScalarRow(QueryRequest query, Map<String, ColMetaData> meta, List<String> rowData, Map<String, Object> flash) {
         SensitiveConfig conf = (SensitiveConfig) flash.get(SEN_KEY_CFG);
         ColMetaData[] colMeta = meta.values().toArray(new ColMetaData[0]);
-        List<String> allColumns = meta.values().stream().map(ColMetaData::getColumn).collect(Collectors.toList());
+        // A rule names the column of the data source, while the result may have had to name a repeated column of its own.
+        List<String> allColumns = meta.values().stream().map(ColMetaData::realColumn).collect(Collectors.toList());
         String rowAlgorithm = SenAlgorithm.SEN_ORIGINAL;
 
         SenColValue[] colValues = new SenColValue[colMeta.length];
@@ -191,7 +192,7 @@ public class SecValueProcessServiceProvider implements ValueProcessService {
         String catalog = senCol.getColMeta().getCatalog();
         String schema = senCol.getColMeta().getSchema();
         String table = senCol.getColMeta().getTable();
-        String column = senCol.getColMeta().getColumn();
+        String column = senCol.getColMeta().realColumn();
         List<UmiTypes> typesList = getDsLevels(flash);
 
         RdbValueDomain domain = new RdbValueDomain();

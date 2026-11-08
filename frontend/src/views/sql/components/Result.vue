@@ -489,6 +489,7 @@ import CustomIcon from '@/components/function/CustomIcon.vue';
 import ExecutionSqlText from '@/views/sql/components/ExecutionSqlText.vue';
 import { getBaseEditorLanguage } from '@/components/editor/sqlLanguage';
 import { isBinaryType, decodeHexToText } from '@/utils/cellValueDisplay';
+import { hasRenamedColumns } from '@/utils/resultColumns';
 import ContextMenu from '@imengyu/vue3-context-menu';
 import XEClipboard from 'xe-clipboard';
 
@@ -526,6 +527,7 @@ export default {
       downloadLoading: false,
       exportModalTitle: '',
       currentExportType: '', // Export format
+      pendingExportEvents: {}, // Events of an export whose tracking id the browser does not know yet, by tracking id
       exportRangeType: 'all', // Export range: 'single' single row, 'page' single page, 'all' all rows
       selectedRowIndex: null, // Selected row index for single-row export
       isFromContextMenu: false, // Whether this was opened from the context menu
@@ -740,22 +742,17 @@ export default {
     });
     this.$bus.on(EVENT_BUS_NAME_LIST.WS_RES_EXPORT_EVENT, (exportData) => {
       const targetTab = this.tab.result.list.find((tab) => tab.exportState?.downloadFile?.trackId === exportData.trackId);
-      if (targetTab && targetTab.exportState) {
-        targetTab.exportState.percent = exportData.percent;
-        if (exportData?.status === 'FAILED') {
-          // Save the error message to exportState.
-          targetTab.exportState.errorStatus = exportData.status;
-          targetTab.exportState.errorMessage = exportData.message || this.$t('cao-zuo-shi-bai-qing-zhong-xin-zhi-hang-cha-xun');
-          targetTab.exportState.exporting = false;
-          this.$Message.warning(this.$t('cao-zuo-shi-bai-qing-zhong-xin-zhi-hang-cha-xun'));
-        } else if (exportData?.status === 'SUCCESS' || exportData?.percent === 100) {
-          // Clear error status on success
-          if (targetTab.exportState.errorStatus) {
-            targetTab.exportState.errorStatus = null;
-            targetTab.exportState.errorMessage = null;
-          }
+      if (!targetTab) {
+        // An export can fail before the answer carrying its tracking id reaches the browser, which would leave the
+        // progress of that export running forever. The event waits here until the answer registers the export, and an
+        // event which already ended the export is never replaced by one still running, however they arrive.
+        const parked = this.pendingExportEvents[exportData.trackId];
+        if (!parked || !this.isFinalExportEvent(parked)) {
+          this.pendingExportEvents[exportData.trackId] = exportData;
         }
+        return;
       }
+      this.applyExportEvent(targetTab, exportData);
     });
     this.$bus.on('setEditorHeight', (height) => {
       this.handleEditorHeightChange(height);
@@ -1283,6 +1280,9 @@ export default {
         connected: !!this.tab.connected,
         activeTabType: this.tab.type,
         columnList: this.selectedTab.columnList || [],
+        // Names the platform had to give out itself, position by position, because the data source reported one name
+        // for several columns. Such a result no longer tells which column of a table a value comes from.
+        columnRenamed: this.selectedTab.columnRenamed || [],
         rowRaw,
         updateContext
       });
@@ -1350,7 +1350,15 @@ export default {
 
       return `INSERT INTO ${left}${tableName}${right} (${keyStr}) VALUES (${valueStr})`;
     },
+    // An INSERT is written column by column, and a name the platform gave out for a repeated label is not a column of
+    // the table the statement would read from. Those names are not made fit for an INSERT here; the action is refused
+    // as a syntax error instead, so no statement which cannot run is ever handed to the user.
     async handleExport({ key, rowIndex }) {
+      const renamed = this.selectedTab ? this.selectedTab.columnRenamed : null;
+      if ((key === 'currentInsert' || key === 'allInsert') && hasRenamedColumns(renamed)) {
+        this.$Message.error(this.$t('sql-diagnostic-error'));
+        return;
+      }
       this.actionType = key;
       const { showData } = this.selectedTab;
       const sqls = [];
@@ -1420,6 +1428,10 @@ export default {
       this.showInsertSqlModal = showInsertSqlModal;
     },
     generateInsertSql() {
+      if (hasRenamedColumns(this.selectedTab ? this.selectedTab.columnRenamed : null)) {
+        this.sqls = [];
+        return;
+      }
       const { showData } = this.selectedTab;
       const sqls = [];
       if (this.actionType === 'currentInsert') {
@@ -1671,6 +1683,43 @@ export default {
         this.dsTypeOptions = Object.keys(this.dmGlobalSetting.dsSettingDef);
       }
     },
+    // The answer of a submitted export names it, so an export which failed before that answer can now be reported.
+    registerExportSubmission(res) {
+      this.selectedTab.exportState.exporting = true;
+      this.selectedTab.exportState.downloadFile = {
+        trackId: res?.data?.trackId,
+        file: res?.data?.newFile,
+        format: res?.data?.newFormat
+      };
+      const trackId = res?.data?.trackId;
+      const pending = this.pendingExportEvents[trackId];
+      if (pending) {
+        delete this.pendingExportEvents[trackId];
+        this.applyExportEvent(this.selectedTab, pending);
+      }
+    },
+    isFinalExportEvent(exportData) {
+      return exportData?.status === 'FAILED' || exportData?.status === 'SUCCESS' || exportData?.percent === 100;
+    },
+    applyExportEvent(targetTab, exportData) {
+      if (!targetTab.exportState) {
+        return;
+      }
+      targetTab.exportState.percent = exportData.percent;
+      if (exportData?.status === 'FAILED') {
+        // Save the error message to exportState.
+        targetTab.exportState.errorStatus = exportData.status;
+        targetTab.exportState.errorMessage = exportData.message || this.$t('cao-zuo-shi-bai-qing-zhong-xin-zhi-hang-cha-xun');
+        targetTab.exportState.exporting = false;
+        this.$Message.warning(this.$t('cao-zuo-shi-bai-qing-zhong-xin-zhi-hang-cha-xun'));
+      } else if (exportData?.status === 'SUCCESS' || exportData?.percent === 100) {
+        // Clear error status on success
+        if (targetTab.exportState.errorStatus) {
+          targetTab.exportState.errorStatus = null;
+          targetTab.exportState.errorMessage = null;
+        }
+      }
+    },
     async confirmSqlExportOption() {
       try {
         const res = await this.$services.dmQueryExportResult({
@@ -1685,12 +1734,7 @@ export default {
         if (res.success) {
           this.showSqlExportOptionModal = false;
           this.initTabExportState();
-          this.selectedTab.exportState.exporting = true;
-          this.selectedTab.exportState.downloadFile = {
-            trackId: res?.data?.trackId,
-            file: res?.data?.newFile,
-            format: res?.data?.newFormat
-          };
+          this.registerExportSubmission(res);
         } else {
           throw new Error(res.message);
         }
@@ -1762,12 +1806,7 @@ export default {
         if (res.success) {
           this.showExportOptionModal = false;
           this.initTabExportState();
-          this.selectedTab.exportState.exporting = true;
-          this.selectedTab.exportState.downloadFile = {
-            trackId: res?.data?.trackId,
-            file: res?.data?.newFile,
-            format: res?.data?.newFormat
-          };
+          this.registerExportSubmission(res);
         } else {
           throw new Error(res.message);
         }

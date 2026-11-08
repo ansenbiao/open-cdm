@@ -17,6 +17,7 @@ package com.clougence.clouddm.sdk.execute.session.rdb;
 
 import java.io.IOException;
 import java.sql.*;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -522,7 +523,11 @@ public class DefaultRdbSession extends AbstractDsSession implements Session, Kil
         // process metaData
         ResultSetMetaBuild meta = b.newResultMeta(query, resultId);
         ResultSetMetaData metaData = rs.getMetaData();
-        ResultSetRowsBuild rb = meta.receiveMeta(extractMetaData(query, metaData));
+        Map<String, ResultColMeta> rowMeta = extractMetaData(query, metaData);
+        ResultSetRowsBuild rb = meta.receiveMeta(rowMeta);
+        // The values are fetched by column name, and a driver answers a name with the first column that carries it, so a
+        // column that was reported under a name another column already took is only reachable through its position.
+        ResultSet fetchRs = UniqueLabelResultSet.wrap(rs, renamedColumnsIndex(rowMeta));
         try {
             meta.finishRecord(true);
 
@@ -530,7 +535,7 @@ public class DefaultRdbSession extends AbstractDsSession implements Session, Kil
             boolean silentReceive = false;
             long lastPageFetchCount = 0;
             while (!this.rdbCancelSignal.get() && rs.next()) {
-                rb.receiveRow(silentReceive, rs);
+                rb.receiveRow(silentReceive, fetchRs);
                 fetchCount++;
                 lastPageFetchCount++;
 
@@ -612,14 +617,48 @@ public class DefaultRdbSession extends AbstractDsSession implements Session, Kil
     }
 
     private Map<String, ResultColMeta> extractMetaData(QueryRequest query, ResultSetMetaData metadata) throws SQLException {
-        Map<String, ResultColMeta> columnMetaDataMapping = new LinkedHashMap<>();
         int columnCount = metadata.getColumnCount();
+
+        List<ColMetaData> columns = new ArrayList<>(columnCount);
+        List<ValueFetcher> fetchers = new ArrayList<>(columnCount);
+        List<String> reportedNames = new ArrayList<>(columnCount);
         for (int i = 1; i <= columnCount; i++) {
             ColMetaData cm = this.rdbHook().getColumnMetaData(query, metadata, i);
-            ValueFetcher cf = this.colReader.readColumn(cm.getColumn(), cm);
-            columnMetaDataMapping.put(cm.getColumn(), new ResultColMeta(cm, cf));
+            // The reader is chosen from the name the data source reported, so numbering a repeated name cannot change it.
+            fetchers.add(this.colReader.readColumn(cm.getColumn(), cm));
+            columns.add(cm);
+            reportedNames.add(cm.getColumn());
+        }
+
+        // Every column of the result has to be kept, and the result is held together by the name of its columns, so a
+        // name that the statement used twice is numbered rather than let one column replace the other.
+        List<String> names = ResultColumnLabels.unique(reportedNames);
+        Map<String, ResultColMeta> columnMetaDataMapping = new LinkedHashMap<>();
+        for (int i = 0; i < columnCount; i++) {
+            ColMetaData cm = columns.get(i);
+            String name = names.get(i);
+            if (!StringUtils.equals(name, cm.getColumn())) {
+                cm.setSourceColumn(cm.getColumn());
+                cm.setColumn(name);
+            }
+
+            columnMetaDataMapping.put(name, new ResultColMeta(cm, fetchers.get(i)));
         }
         return columnMetaDataMapping;
+    }
+
+    /**
+     * The position inside the statement of every column that the result had to name differently from the data source.
+     */
+    private static Map<String, Integer> renamedColumnsIndex(Map<String, ResultColMeta> rowMeta) {
+        Map<String, Integer> indexByRenamedName = new HashMap<>();
+        for (Map.Entry<String, ResultColMeta> entry : rowMeta.entrySet()) {
+            ColMetaData cm = entry.getValue().getMeta();
+            if (StringUtils.isNotBlank(cm.getSourceColumn())) {
+                indexByRenamedName.put(entry.getKey(), cm.getIndex());
+            }
+        }
+        return indexByRenamedName;
     }
 
     public long getUpdateCount(Statement ps) throws SQLException {

@@ -314,6 +314,7 @@ export default {
           connected: !!data.connected,
           activeTabType: data.activeTabType || '',
           columnList: data.columnList || [],
+          columnRenamed: data.columnRenamed || [],
           rowRaw: data.rowRaw || null
         };
         // Full texts fetched for truncated locator columns during this edit session (non-reactive cache).
@@ -515,6 +516,11 @@ export default {
       if (!data.connected) {
         return false;
       }
+      // A name the platform gave out itself stands for one of several columns which share it, so no name of such a
+      // result can be trusted, not even the one which locates the row: no cell of it may be edited.
+      if (Array.isArray(data.columnRenamed) && data.columnRenamed.some(Boolean)) {
+        return false;
+      }
       const ctx = data.updateContext;
       if (!ctx || !Array.isArray(ctx.levels) || !ctx.levels.length || !ctx.effectiveSql || !ctx.sessionId) {
         return false;
@@ -607,6 +613,11 @@ export default {
       const detail = this.selectedCellDetail;
       try {
         if (!this.showDetailModal || !ctx) {
+          return;
+        }
+        // Same rule as the eligibility check above, kept here because the state of the button may be older than the data.
+        if ((detail.columnRenamed || []).some(Boolean)) {
+          this.$Message.warning(this.$t('dang-qian-cha-xun-jie-guo-bu-zhi-chi-bian-ji'));
           return;
         }
         // Matches a (possibly qualified) table identifier quoted with backticks, double quotes or brackets, or bare.

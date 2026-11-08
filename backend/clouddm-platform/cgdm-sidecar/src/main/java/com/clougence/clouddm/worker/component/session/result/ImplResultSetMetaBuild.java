@@ -77,6 +77,7 @@ class ImplResultSetMetaBuild extends AbstractResultBuild<ResultSetMeta> implemen
         r.setResultType(ResultType.ResultSetMeta);
         r.setColumnList(new LinkedList<>());
         r.setColumnType(new LinkedList<>());
+        r.setColumnRenamed(new LinkedList<>());
         return r;
     }
 
@@ -115,6 +116,8 @@ class ImplResultSetMetaBuild extends AbstractResultBuild<ResultSetMeta> implemen
 
                 this.get().getColumnList().add(m.getMeta().getColumn());
                 this.get().getColumnType().add(m.getMeta().getColumnType());
+                // A name the platform had to give out is not the name of a column of some table, whatever it looks like.
+                this.get().getColumnRenamed().add(m.getMeta().getSourceColumn() != null);
             }
 
             // init storage

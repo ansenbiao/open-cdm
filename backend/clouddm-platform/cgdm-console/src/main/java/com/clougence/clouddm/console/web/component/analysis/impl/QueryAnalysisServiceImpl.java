@@ -44,6 +44,7 @@ import com.clougence.clouddm.platform.plugin.PluginManager;
 import com.clougence.clouddm.sdk.execute.session.QueryArg;
 import com.clougence.clouddm.sdk.execute.session.QueryRequest;
 import com.clougence.clouddm.sdk.execute.session.ResultLimit;
+import com.clougence.clouddm.sdk.execute.session.rdb.ResultColumnLabels;
 import com.clougence.clouddm.sdk.execute.session.result.ColumnConfig;
 import com.clougence.clouddm.sdk.security.auth.AuthKind;
 import com.clougence.clouddm.sdk.security.auth.SecDataAuthKind;
@@ -312,13 +313,18 @@ public class QueryAnalysisServiceImpl implements QueryAnalysisService {
             if (request.hasQueryType(SplitQueryType.SELECT)) {
                 List<LineageColumn> lineageCols = this.lineageSpi.analyze(request.getQueryBody(), this.lineageContext);
 
-                Set<String> columnNames = new HashSet<>();
-                if (lineageCols.stream().anyMatch(c -> !columnNames.add(c.column()))) {
-                    throw new ErrorMessageException(DmI18nUtils.getMessage(I18nDmMsgKeys.CONSOLE_QUERY_FORBID_SELECT_COLUMN_SAME_NAME.name()));
-                }
+                // A name which several columns share cannot carry the sources of one of them, and the execution
+                // numbers such columns on the result, so the numbered names would not be found here anyway. Skipping
+                // them leaves the value process to the table and column of every single occurrence, which is what
+                // data sources without a lineage analysis already do.
+                Set<String> duplicatedColumns = ResultColumnLabels.duplicated(lineageCols.stream().map(LineageColumn::column).toList());
 
                 Map<String, ColumnConfig> columnList = new LinkedHashMap<>();
                 for (LineageColumn lineage : lineageCols) {
+                    if (duplicatedColumns.contains(lineage.column())) {
+                        continue;
+                    }
+
                     ColumnConfig config = new ColumnConfig();
                     config.setSourceNames(lineage.sources());
                     // TODO  use DmDsMetaConfigDO config column

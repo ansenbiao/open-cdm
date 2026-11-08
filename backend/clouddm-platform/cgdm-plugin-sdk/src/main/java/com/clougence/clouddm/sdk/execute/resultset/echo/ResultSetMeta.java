@@ -30,14 +30,19 @@ import lombok.Setter;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class ResultSetMeta extends Result {
 
-    private int          fetchCount;
-    private String       receiveCost;
+    private int           fetchCount;
+    private String        receiveCost;
 
-    private List<String> columnList;
-    private List<String> columnType;
-    private String       cacheFilePath;
-    private String       cacheFileUri;
-    private DmFileType   cacheFileFormat;
-    private ReceiveMode  receiveMode;
-    private boolean      refreshOnProgress;
+    private List<String>  columnList;
+    private List<String>  columnType;
+    /**
+     * Whether the name at the same position was given out by the platform because the data source reported it for more
+     * than one column. Such a name no longer tells which column of a table it comes from.
+     */
+    private List<Boolean> columnRenamed;
+    private String        cacheFilePath;
+    private String        cacheFileUri;
+    private DmFileType    cacheFileFormat;
+    private ReceiveMode   receiveMode;
+    private boolean       refreshOnProgress;
 }

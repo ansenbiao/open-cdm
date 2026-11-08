@@ -29,15 +29,17 @@ import lombok.Setter;
 @Setter
 public class WsResultSetMetaMsg extends WsQueryResult {
 
-    private String       resultId;
-    private List<String> columnList;
-    private List<String> columnType;
-    private ReceiveMode  receiveMode;
-    private boolean      refreshOnProgress;
+    private String        resultId;
+    private List<String>  columnList;
+    private List<String>  columnType;
+    /** Which of the names above the platform gave out itself, because the data source reported one name for several columns. */
+    private List<Boolean> columnRenamed;
+    private ReceiveMode   receiveMode;
+    private boolean       refreshOnProgress;
 
-    private String       receiveCost;
-    private String       cacheFile;
-    private String       querySql;
-    private String       original;
-    private List<String> rewriteTags;
+    private String        receiveCost;
+    private String        cacheFile;
+    private String        querySql;
+    private String        original;
+    private List<String>  rewriteTags;
 }

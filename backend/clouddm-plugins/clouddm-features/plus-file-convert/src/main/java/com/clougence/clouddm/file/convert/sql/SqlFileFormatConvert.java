@@ -105,6 +105,15 @@ public class SqlFileFormatConvert implements FileFormatConvert {
         try (ResultReader rr = service.getResultService().openReader(srcFile.getAbsoluteFile())) {
             QueryRequest query = rr.getQueryInfo();
             ColMetaData[] metaData = rr.getMetadataInfo();
+            // Several columns of one result can share the name the data source reported, which the platform numbers for the
+            // result itself. An INSERT is written by column name, so such a result would name columns the query never read
+            // from and the file could not run; the export says so instead of writing it.
+            String sharedName = sharedSourceColumnName(metaData);
+            if (sharedName != null) {
+                throw new IOException("The exported INSERT statements would be a syntax error: more than one column of the result is named \"" + sharedName
+                                      + "\". Give every column a name of its own with an alias (AS) and export again.");
+            }
+
             Map<String, ColMetaData> rowMeta = readResultColumns(metaData);
 
             SqlOption option = readSqlOption(optionStr, metaData);
@@ -296,6 +305,19 @@ public class SqlFileFormatConvert implements FileFormatConvert {
             columnMap.put(m.getColumn(), m);
         }
         return columnMap;
+    }
+
+    /**
+     * @return the name several columns of the result were reported with, or null when every column has one of its own
+     */
+    private String sharedSourceColumnName(ColMetaData[] col) {
+        for (ColMetaData m : col) {
+            // A name the platform gave out to the result is the one telling that the data source repeated it.
+            if (m.getSourceColumn() != null) {
+                return m.getSourceColumn();
+            }
+        }
+        return null;
     }
 
     private SqlValueHandler getValueHandler(DataSourceType type) {
