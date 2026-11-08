@@ -21,7 +21,6 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 
@@ -107,23 +106,20 @@ public class MsExcelFileFormatConvert implements FileFormatConvert {
         long lastReport = 0;
         AtomicLong lastFlashRowNumber = new AtomicLong(0);
         List<MsExcelRowData> rowBatch = new ArrayList<>();
+        List<ColMetaData> columns = new ArrayList<>(meta.values());
+        MsExcelExportPlan plan = MsExcelExportPlan.of(columns, option);
 
         ExcelWriter writer = FastExcel.write(fos).build();
         WriteSheet sheet = FastExcel.writerSheet("ResultSet").build();
-        sheet.setCustomWriteHandlerList(Collections.singletonList(new MsExcelCellWriteHandler(lastFlashRowNumber, rowBatch)));
+        sheet.setCustomWriteHandlerList(Collections.singletonList(new MsExcelCellWriteHandler(lastFlashRowNumber, rowBatch, plan)));
 
         // reading data.
-        List<String> header = meta.values().stream().filter(colMetaData -> {
-            return option.getColumns().get(colMetaData.getIndex() - 1).isExport();
-        }).map(colMetaData -> {
-            return option.getColumns().get(colMetaData.getIndex() - 1).getColumnName();
-        }).collect(Collectors.toList());
-        writer.write(Collections.singletonList(header), sheet);
+        writer.write(Collections.singletonList(new ArrayList<>(plan.getHeader())), sheet);
 
         long offset = option.getOffset();
         long limit = option.getLimit() < 0 ? rowCnt : Math.max(1, option.getLimit());
         long writeCnt = 0;
-        int colSize = meta.size();
+        int colSize = columns.size();
         List<String> tmpCache = new ArrayList<>(3);
         for (int r = 0; r < rowCnt; r++) {
             rr.nextRow();
@@ -131,9 +127,10 @@ public class MsExcelFileFormatConvert implements FileFormatConvert {
                 continue;
             }
 
-            // read row data
+            // read row data: every stored column is read, also the ones that are not exported, because the reader
+            // walks the values of the row in the order they were cached.
             MsExcelRowData rowData = new MsExcelRowData(writeCnt, colSize);
-            for (int c = 0; c < meta.size(); c++) {
+            for (int c = 0; c < colSize; c++) {
                 String prefix;
                 int maxFetch;
                 if (rr.nextDataType() == ResultType.Bytes) {
@@ -144,7 +141,7 @@ public class MsExcelFileFormatConvert implements FileFormatConvert {
                     maxFetch = 32767; // cell max length
                 }
 
-                ResultSetValue value = rr.readAsString(meta.get(header.get(c)), query.getResultConf(), 0, maxFetch);
+                ResultSetValue value = rr.readAsString(columns.get(c), query.getResultConf(), 0, maxFetch);
                 this.readResultColumnValue(prefix, value, c, rowData, tmpCache);
             }
             rowBatch.add(rowData);
@@ -163,14 +160,14 @@ public class MsExcelFileFormatConvert implements FileFormatConvert {
 
             // try flash write
             if (r % 500 == 0) {
-                this.doWriteExcel(query, meta, rowBatch, option, writer, sheet);
+                this.doWriteExcel(query, meta, rowBatch, plan, writer, sheet);
                 lastFlashRowNumber.getAndAdd(rowBatch.size());
                 rowBatch.clear();
             }
         }
 
         if (!rowBatch.isEmpty()) {
-            this.doWriteExcel(query, meta, rowBatch, option, writer, sheet);
+            this.doWriteExcel(query, meta, rowBatch, plan, writer, sheet);
             lastFlashRowNumber.getAndAdd(rowBatch.size());
             rowBatch.clear();
         }
@@ -181,17 +178,15 @@ public class MsExcelFileFormatConvert implements FileFormatConvert {
         return writeCnt;
     }
 
-    private void doWriteExcel(QueryRequest query, Map<String, ColMetaData> meta, List<MsExcelRowData> dataBatch, XlsxOption option,//
+    private void doWriteExcel(QueryRequest query, Map<String, ColMetaData> meta, List<MsExcelRowData> dataBatch, MsExcelExportPlan plan,//
                               ExcelWriter writer, WriteSheet sheet) {
         this.doMask(query, meta, dataBatch);
 
         List<List<String>> v = new ArrayList<>();
         for (MsExcelRowData batch : dataBatch) {
-            List<String> rowData = new ArrayList<>();
-            for (int i = 0; i < batch.getRowData().size(); i++) {
-                if (option.getColumns().get(i).isExport()) {
-                    rowData.add(batch.getRowData().get(i));
-                }
+            List<String> rowData = new ArrayList<>(plan.size());
+            for (int column : plan.getColumns()) {
+                rowData.add(batch.getRowData().get(column));
             }
             v.add(rowData);
         }

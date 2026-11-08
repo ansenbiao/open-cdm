@@ -43,10 +43,12 @@ public class MsExcelCellWriteHandler implements CellWriteHandler {
 
     private final AtomicLong           lastRowId;
     private final List<MsExcelRowData> rowBatch;
+    private final MsExcelExportPlan    plan;
 
-    public MsExcelCellWriteHandler(AtomicLong lastRowId, List<MsExcelRowData> rowBatch){
+    public MsExcelCellWriteHandler(AtomicLong lastRowId, List<MsExcelRowData> rowBatch, MsExcelExportPlan plan){
         this.lastRowId = lastRowId;
         this.rowBatch = rowBatch;
+        this.plan = plan;
     }
 
     private MsExcelRowData findRowData(long rowIndex) {
@@ -68,7 +70,13 @@ public class MsExcelCellWriteHandler implements CellWriteHandler {
             return;
         }
 
-        String common = rowData.getRowComment().get(columnIndex);
+        // the sheet only holds the exported columns, while the row keeps every column of the result
+        int storedColumn = this.plan.storedColumn(columnIndex);
+        if (storedColumn < 0 || storedColumn >= rowData.getRowComment().size()) {
+            return;
+        }
+
+        String common = rowData.getRowComment().get(storedColumn);
         if (StringUtils.isBlank(common)) {
             return;
         }
