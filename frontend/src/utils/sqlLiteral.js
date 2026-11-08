@@ -4,7 +4,19 @@
  *
  * Values arriving from the result grid are already-rendered strings; binary columns are rendered as uppercase hex text
  * (backend HexadecimalUtils.bytes2hex), so binary literals are built from hex.
+ *
+ * Oracle-family types (Oracle / ObForOracle / GoldenDBOracle / YashanDBOracle / KingbaseESOracle) share '' == NULL,
+ * a 4000-byte SQL string literal limit and no backslash escaping, so their literals are built separately below.
  */
+import { MySQL as MYSQL_TYPES } from '@/const/dataSource';
+
+// Oracle-family SQL string literals stay capped at 4000 bytes on 12c/18c/19c: MAX_STRING_SIZE=EXTENDED only widens
+// VARCHAR2 columns, longer text must be concatenated from to_clob() chunks.
+const ORACLE_LITERAL_MAX_BYTES = 4000;
+// HEXTORAW() returns RAW, which SQL limits to 2000 bytes per call.
+const ORACLE_HEXTORAW_MAX_BYTES = 2000;
+// UTL_RAW.CONCAT() ceiling used to assemble larger binary values for BLOB columns.
+const ORACLE_RAW_CONCAT_MAX_BYTES = 32767;
 
 // Types whose grid value is hex text (RowStorage/ResultFileReader render byte[] via bytes2hex).
 // BIT/BOOLEAN/BOOL are excluded: they are displayed as True/False numbers, not hex.
@@ -21,6 +33,17 @@ export function isBinaryColumnType(type) {
 export function isCharLikeType(type) {
   const t = String(type || '').toUpperCase();
   return /CHAR|TEXT|CLOB|STRING|DATE|TIME|TIMESTAMP|ENUM|SET|JSON|UUID|NAME|XML|INTERVAL/.test(t);
+}
+
+// Oracle and its compatibility modes (ObForOracle / GoldenDBOracle / YashanDBOracle / KingbaseESOracle).
+export function isOracleFamily(dsType) {
+  return /Oracle/i.test(String(dsType || ''));
+}
+
+// Text LOB columns accept values above the SQL literal limit through to_clob()/empty_clob().
+export function isTextLobType(type) {
+  const t = String(type || '').toUpperCase();
+  return t.includes('CLOB') || t.startsWith('LONG');
 }
 
 export function isNumericLiteral(value) {
@@ -40,8 +63,37 @@ export function normalizeHex(value) {
   return s.toUpperCase();
 }
 
+// Oracle binary literal: HEXTORAW() is capped at 2000 bytes, so larger values for BLOB columns are assembled from
+// 2000-byte RAW chunks (UTL_RAW.CONCAT takes up to three at a time and returns at most 32767 bytes).
+function oracleBinaryLiteral(hex, colType, opts = {}) {
+  const isBlob = /^BLOB/i.test(String(colType || '').toUpperCase());
+  if (!hex.length) {
+    return isBlob ? 'empty_blob()' : `hextoraw('')`;
+  }
+  const bytes = Math.ceil(hex.length / 2);
+  if (bytes <= ORACLE_HEXTORAW_MAX_BYTES) {
+    return `hextoraw('${hex}')`;
+  }
+  if (!isBlob || bytes > ORACLE_RAW_CONCAT_MAX_BYTES) {
+    throw new Error(opts.tooLongMessage || `Binary value exceeds the Oracle write limit of ${ORACLE_RAW_CONCAT_MAX_BYTES} bytes`);
+  }
+  const chunkChars = ORACLE_HEXTORAW_MAX_BYTES * 2;
+  const parts = [];
+  for (let i = 0; i < hex.length; i += chunkChars) {
+    parts.push(`hextoraw('${hex.slice(i, i + chunkChars)}')`);
+  }
+  return `to_blob(${concatRawParts(parts)})`;
+}
+
+function concatRawParts(parts) {
+  if (parts.length <= 3) {
+    return `utl_raw.concat(${parts.join(', ')})`;
+  }
+  return `utl_raw.concat(${parts[0]}, ${parts[1]}, ${concatRawParts(parts.slice(2))})`;
+}
+
 // Binary literal per dialect family; values come from the grid as hex text (RowStorage renders byte[] via bytes2hex).
-export function binaryLiteral(hex, dsType) {
+export function binaryLiteral(hex, dsType, colType, opts) {
   const ds = String(dsType || '');
   // Pg-family bytea (hex format is accepted by default).
   if (/Postgre|Greenplum|Cloudberry|Redshift|Hologres|CockroachDB|GaussDB|^PolarDbX$|^pg$/i.test(ds)) {
@@ -57,7 +109,7 @@ export function binaryLiteral(hex, dsType) {
     return `CONVERT(VARBINARY, '${hex}', 16)`;
   }
   if (/Oracle/i.test(ds)) {
-    return `HEXTORAW('${hex}')`;
+    return oracleBinaryLiteral(hex, colType, opts);
   }
   if (/^ClickHouse$/i.test(ds)) {
     return `unhex('${hex}')`;
@@ -94,9 +146,26 @@ export function hexToUtf8Text(hex) {
 }
 
 // MySQL-family uses backticks; the rest use double quotes, matching getQualifier's default rule.
+// MYSQL_TYPES comes from const/dataSource.js so MySQL-compatible types (GoldenDBMySQL, YashanDBMySQL) stay in sync.
+const MYSQL_QUALIFIER_TYPES = [
+  ...MYSQL_TYPES,
+  'PolarDbMySQL',
+  'AdbForMySQL',
+  'KingbaseESMySQL',
+  'SelectDB',
+  'PolarDB',
+  'TiDB',
+  'OceanBase',
+  'OBForMySQL',
+  'ObForMySQL',
+  'MariaDB',
+  'StarRocks',
+  'Doris',
+  'ADB'
+];
+
 export function sqlQualifier(dsType) {
-  const mysqlFamily = ['MySQL', 'PolarDB', 'TiDB', 'OceanBase', 'OBForMySQL', 'ObForMySQL', 'MariaDB', 'StarRocks', 'Doris', 'ADB'];
-  return mysqlFamily.includes(dsType) ? { left: '`', right: '`' } : { left: '"', right: '"' };
+  return MYSQL_QUALIFIER_TYPES.includes(dsType) ? { left: '`', right: '`' } : { left: '"', right: '"' };
 }
 
 // Quote a (possibly schema-qualified) identifier with the dialect qualifier.
@@ -108,13 +177,109 @@ export function quoteName(name, qualifier) {
     .join(`${q.right}.${q.left}`)}${q.right}`;
 }
 
-// Escape and quote a string literal (SQLServer doubles single quotes only; others also escape backslashes).
+// Escape and quote a string literal. SQLServer and Oracle-family treat the backslash literally (only single quotes are
+// doubled); the remaining dialects use backslash as an escape character.
 export function stringLiteral(value, dsType) {
-  const q = dsType === 'SQLServer' ? String(value).replace(/'/g, "''") : String(value).replace(/\\/g, '\\\\').replace(/'/g, "''");
-  return `'${q}'`;
+  const text = String(value);
+  if (dsType === 'SQLServer' || isOracleFamily(dsType)) {
+    return `'${text.replace(/'/g, "''")}'`;
+  }
+  return `'${text.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
 }
 
-// Build a SQL literal for a grid-rendered value. opts.invalidHexMessage lets callers supply a translated error message.
+function charByteLength(codePoint) {
+  if (codePoint < 0x80) {
+    return 1;
+  }
+  if (codePoint < 0x800) {
+    return 2;
+  }
+  if (codePoint < 0x10000) {
+    return 3;
+  }
+  return 4;
+}
+
+function utf8ByteLength(text) {
+  let bytes = 0;
+  for (const ch of text) {
+    bytes += charByteLength(ch.codePointAt(0));
+  }
+  return bytes;
+}
+
+// Split text into chunks whose UTF-8 size fits maxBytes without cutting a character in half.
+function splitByUtf8Bytes(text, maxBytes) {
+  const chunks = [];
+  let current = '';
+  let size = 0;
+  for (const ch of text) {
+    const len = charByteLength(ch.codePointAt(0));
+    if (current && size + len > maxBytes) {
+      chunks.push(current);
+      current = '';
+      size = 0;
+    }
+    current += ch;
+    size += len;
+  }
+  if (current) {
+    chunks.push(current);
+  }
+  return chunks;
+}
+
+// DATE/TIMESTAMP columns: ANSI literals are independent of the session NLS_DATE_FORMAT, which a plain quoted string is not.
+function oracleTemporalLiteral(text, colType) {
+  const t = String(colType || '').toUpperCase();
+  if (!/DATE|TIME/.test(t)) {
+    return null;
+  }
+  const dateTime = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(\.\d{1,9})?$/.exec(text);
+  if (dateTime) {
+    if (/TIMESTAMP|DATETIME/.test(t)) {
+      return `timestamp '${dateTime[1]} ${dateTime[2]}${dateTime[3] || ''}'`;
+    }
+    // DATE has no sub-second precision, so any fractional part is dropped.
+    return `to_date('${dateTime[1]} ${dateTime[2]}', 'YYYY-MM-DD HH24:MI:SS')`;
+  }
+  const dateOnly = /^(\d{4}-\d{2}-\d{2})$/.exec(text);
+  if (dateOnly) {
+    if (/TIMESTAMP|DATETIME/.test(t)) {
+      return `timestamp '${dateOnly[1]} 00:00:00'`;
+    }
+    return `date '${dateOnly[1]}'`;
+  }
+  return null;
+}
+
+// Oracle-family text literal: '' is NULL for plain columns (empty_clob() for text LOBs), values beyond the 4000-byte
+// literal limit are concatenated from to_clob() chunks, and numeric-looking text in numeric columns stays unquoted.
+function oracleTextLiteral(value, colType, dsType, opts = {}) {
+  const text = String(value == null ? '' : value);
+  if (text === '') {
+    return isTextLobType(colType) ? 'empty_clob()' : 'null';
+  }
+  const temporal = oracleTemporalLiteral(text, colType);
+  if (temporal) {
+    return temporal;
+  }
+  if (isNumericLiteral(text) && !isCharLikeType(colType)) {
+    return text;
+  }
+  if (utf8ByteLength(text) <= ORACLE_LITERAL_MAX_BYTES) {
+    return stringLiteral(text, dsType);
+  }
+  if (!isTextLobType(colType)) {
+    throw new Error(opts.tooLongMessage || `Text exceeds the Oracle literal limit of ${ORACLE_LITERAL_MAX_BYTES} bytes`);
+  }
+  return splitByUtf8Bytes(text, ORACLE_LITERAL_MAX_BYTES)
+    .map((chunk) => `to_clob(${stringLiteral(chunk, dsType)})`)
+    .join(' || ');
+}
+
+// Build a SQL literal for a grid-rendered value. opts.invalidHexMessage / opts.tooLongMessage let callers supply
+// translated error messages.
 export function sqlLiteral(value, colType, dsType, opts = {}) {
   if (value === null) {
     return 'null';
@@ -124,7 +289,10 @@ export function sqlLiteral(value, colType, dsType, opts = {}) {
     if (hex === null) {
       throw new Error(opts.invalidHexMessage || 'Invalid hexadecimal text');
     }
-    return binaryLiteral(hex, dsType);
+    return binaryLiteral(hex, dsType, colType, opts);
+  }
+  if (isOracleFamily(dsType)) {
+    return oracleTextLiteral(value, colType, dsType, opts);
   }
   if (isNumericLiteral(value)) {
     return String(value);
@@ -143,7 +311,7 @@ function formatDateLiteral(d) {
 /**
  * Build a SQL literal for an imported raw cell value (from xlsx sheet_to_json with raw:true, cellDates:true).
  * Handles null/undefined, empty strings (optionally as NULL), Date, boolean, binary-target text, char/date-like columns
- * (always quoted) and numeric values. opts: { emptyAsNull = true, invalidHexMessage }.
+ * (always quoted) and numeric values. opts: { emptyAsNull = true, invalidHexMessage, tooLongMessage }.
  */
 export function formatSqlValue(rawValue, colType, dsType, opts = {}) {
   const { emptyAsNull = true } = opts;
@@ -151,14 +319,19 @@ export function formatSqlValue(rawValue, colType, dsType, opts = {}) {
     return 'null';
   }
   if (rawValue instanceof Date) {
-    return Number.isNaN(rawValue.getTime()) ? 'null' : stringLiteral(formatDateLiteral(rawValue), dsType);
+    if (Number.isNaN(rawValue.getTime())) {
+      return 'null';
+    }
+    const text = formatDateLiteral(rawValue);
+    const temporal = isOracleFamily(dsType) ? oracleTemporalLiteral(text, colType) : null;
+    return temporal || stringLiteral(text, dsType);
   }
   if (isBinaryColumnType(colType)) {
     const text = String(rawValue);
     if (!text) {
-      return emptyAsNull ? 'null' : binaryLiteral('', dsType);
+      return emptyAsNull ? 'null' : binaryLiteral('', dsType, colType, opts);
     }
-    return binaryLiteral(utf8TextToHex(text), dsType);
+    return binaryLiteral(utf8TextToHex(text), dsType, colType, opts);
   }
   if (typeof rawValue === 'boolean') {
     return rawValue ? '1' : '0';
@@ -167,12 +340,14 @@ export function formatSqlValue(rawValue, colType, dsType, opts = {}) {
   if (s === '') {
     return emptyAsNull ? 'null' : stringLiteral('', dsType);
   }
+  // Oracle-family keeps its own quoting/chunking rules (no backslash escape, to_clob() for long text).
+  const textLiteral = (v) => (isOracleFamily(dsType) ? oracleTextLiteral(v, colType, dsType, opts) : stringLiteral(v, dsType));
   // Character/date-like columns must stay quoted so leading zeros and text are preserved.
   if (isCharLikeType(colType)) {
-    return stringLiteral(s, dsType);
+    return textLiteral(s);
   }
   if (isNumericLiteral(s)) {
     return s;
   }
-  return stringLiteral(s, dsType);
+  return textLiteral(s);
 }

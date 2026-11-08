@@ -522,11 +522,10 @@ export default {
       if ((ctx.activeTabType || data.activeTabType) !== TAB_TYPE.QUERY) {
         return false;
       }
-      // Oracle-family needs TO_CLOB/HEXTORAW wrappers for LOB/binary literals; ClickHouse stores binary in String columns.
-      // Both are left to the dedicated data editor for now.
+      // ClickHouse stores binary in String columns and only supports asynchronous mutations, so editing is left to the
+      // dedicated data editor. Oracle-family is supported through to_clob()/hextoraw() literal handling.
       const dsType = data.dataSourceType || data.dsType;
-      const unsupportedDs = ['Oracle', 'ObForOracle', 'GoldenDBOracle', 'YashanDBOracle', 'KingbaseESOracle', 'ClickHouse'];
-      if (!dsType || unsupportedDs.includes(dsType)) {
+      if (!dsType || dsType === 'ClickHouse') {
         return false;
       }
       return true;
@@ -542,8 +541,8 @@ export default {
       return utilNormalizeHex(value);
     },
     // Binary literal per dialect family; values come from the grid as hex text (RowStorage renders byte[] via bytes2hex).
-    binaryLiteral(hex, dsType) {
-      return utilBinaryLiteral(hex, dsType);
+    binaryLiteral(hex, dsType, colType) {
+      return utilBinaryLiteral(hex, dsType, colType, { tooLongMessage: this.$t('nei-rong-chao-guo-oracle-dan-tiao-yu-ju-xie-ru-shang-xian') });
     },
     // Encode UTF-8 text to an uppercase hex string, used when a binary cell is edited as text.
     utf8TextToHex(text) {
@@ -566,7 +565,10 @@ export default {
       return utilSqlQualifier(dsType);
     },
     sqlLiteral(value, colType, dsType) {
-      return utilSqlLiteral(value, colType, dsType, { invalidHexMessage: this.$t('he-xin-zi-fu-fei-fa-de-er-jin-zhi-wen-ben') });
+      return utilSqlLiteral(value, colType, dsType, {
+        invalidHexMessage: this.$t('he-xin-zi-fu-fei-fa-de-er-jin-zhi-wen-ben'),
+        tooLongMessage: this.$t('nei-rong-chao-guo-oracle-dan-tiao-yu-ju-xie-ru-shang-xian')
+      });
     },
     async fetchFullCellValue(colNumber, rowNumber) {
       let content = '';
@@ -769,7 +771,7 @@ export default {
         valueExpr = 'null';
       } else if (targetMeta && this.isBinaryColumnType(targetMeta.dbType) && this.cellEdit.binaryAsText) {
         // Text input mode: store the UTF-8 bytes of the typed text as the binary value.
-        valueExpr = this.binaryLiteral(this.utf8TextToHex(this.cellDetailContent), dsType);
+        valueExpr = this.binaryLiteral(this.utf8TextToHex(this.cellDetailContent), dsType, targetMeta.dbType);
       } else {
         valueExpr = this.sqlLiteral(this.cellDetailContent, targetMeta ? targetMeta.dbType : undefined, dsType);
       }

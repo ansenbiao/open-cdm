@@ -685,6 +685,7 @@
   "nei-cun-mb": "内存（MB）",
   "nei-cun-shi-yong-shuai": "JVM内存使用率(%)",
   "nei-rong": "内容",
+  "nei-rong-chao-guo-oracle-dan-tiao-yu-ju-xie-ru-shang-xian": "内容超过 Oracle 单条语句的写入上限（文本 4000 字节、二进制 32767 字节），请缩短后重试",
   "neng-fou-wei-null": "能否为NULL",
   "nian": "年",
   "nin-dang-qian-yi-you-tian-jia-ji-qi-que-ren-dang-qian-suo-xuan-shu-ju-yuan-bu-dui-ci-tian-jia-bai-ming-dan-ru-bu-tian-jia-hou-xu-qing-zhi-shu-ju-yuan-guan-li-tian-jia": "您当前已有添加机器，确认当前所选数据源不对此添加白名单？如不添加，后续请至数据源管理添加。",

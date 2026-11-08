@@ -681,6 +681,7 @@
   "nei-cun-mb": "RAM (MB)",
   "nei-cun-shi-yong-shuai": "Memory Usage (%)",
   "nei-rong": "Content",
+  "nei-rong-chao-guo-oracle-dan-tiao-yu-ju-xie-ru-shang-xian": "Content exceeds the Oracle per-statement write limit (4000 bytes for text, 32767 bytes for binary), please shorten it",
   "neng-fou-wei-null": "Is NULL",
   "nian": "Year",
   "nin-dang-qian-yi-you-tian-jia-ji-qi-que-ren-dang-qian-suo-xuan-shu-ju-yuan-bu-dui-ci-tian-jia-bai-ming-dan-ru-bu-tian-jia-hou-xu-qing-zhi-shu-ju-yuan-guan-li-tian-jia": "You have already added a worker, confirm that the dataSource is not whitelisted? If not, please go to dataSource management to add later.",

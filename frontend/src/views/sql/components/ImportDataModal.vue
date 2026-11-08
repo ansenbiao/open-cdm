@@ -141,7 +141,10 @@ export default {
         const table = quoteName(this.targetTable, qualifier);
         const cols = mapped.map((m) => quoteName(m.targetField, qualifier)).join(', ');
         const metas = mapped.map((m) => this.targetColumns.find((c) => c.name === m.targetField));
-        const opts = { emptyAsNull: this.emptyAsNull };
+        const opts = {
+          emptyAsNull: this.emptyAsNull,
+          tooLongMessage: this.$t('nei-rong-chao-guo-oracle-dan-tiao-yu-ju-xie-ru-shang-xian')
+        };
         const r = rows[0];
         const vals = mapped
           .map((m, i) => formatSqlValue(Array.isArray(r) ? r[m.dataIndex] : null, metas[i] ? metas[i].dbType : undefined, this.dsType, opts))
@@ -476,7 +479,10 @@ export default {
       const table = quoteName(this.targetTable, qualifier);
       const cols = mapped.map((m) => quoteName(m.targetField, qualifier)).join(', ');
       const metas = mapped.map((m) => this.targetColumns.find((c) => c.name === m.targetField));
-      const opts = { emptyAsNull: this.emptyAsNull };
+      const opts = {
+        emptyAsNull: this.emptyAsNull,
+        tooLongMessage: this.$t('nei-rong-chao-guo-oracle-dan-tiao-yu-ju-xie-ru-shang-xian')
+      };
       const tuple = (row) =>
         '(' +
         mapped
