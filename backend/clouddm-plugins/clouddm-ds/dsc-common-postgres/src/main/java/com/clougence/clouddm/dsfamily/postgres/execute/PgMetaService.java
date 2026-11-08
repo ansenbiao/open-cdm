@@ -113,15 +113,21 @@ public class PgMetaService extends DefaultRdbMetaService {
         try {
             return this.rdbSession.executeQuery(con -> {
                 switch (leafType) {
+                    case Table:
+                        return showCreateTable(con, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
                     case View:
                         return showCreateView(con, StringUtils.toString(levelsParam.get(UmiTypes.Catalog)), StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
+                    case Materialized:
+                        return showCreateMaterializedView(con, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
                     case Trigger:
                         return showCreateTrigger(con, StringUtils.toString(levelsParam.get(UmiTypes.Catalog)), StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
                     case Function:
                     case Procedure:
                         return showCreateFunction(con, StringUtils.toString(levelsParam.get(UmiTypes.Catalog)), StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
+                    case Sequence:
+                        return showCreateSequence(con, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
                     default:
-                        throw new UnsupportedOperationException("MSSQL '" + leafType + "' Unsupported.");
+                        throw new UnsupportedOperationException("PostgreSQL '" + leafType + "' Unsupported.");
                 }
             });
         } catch (Exception e) {
@@ -157,6 +163,65 @@ public class PgMetaService extends DefaultRdbMetaService {
                 return Collections.singletonList(rs.getString(1));
             } else {
                 return Collections.emptyList();
+            }
+        }
+    }
+
+    /**
+     * PostgreSQL has no SHOW CREATE TABLE, so the statement is recomposed from the catalog views pg_dump reads too:
+     * every live column with its resolved type, nullability and default, followed by the table constraints.
+     * Identity and generated columns surface through their pg_attrdef expression, which is also how a serial column
+     * is stored, so the text stays executable for the common cases.
+     */
+    protected List<String> showCreateTable(Connection con, String schema, String table) throws SQLException {
+        String showSql = "SELECT 'CREATE TABLE ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || ' (' || chr(10) \n"
+                         + "  || (SELECT string_agg('  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod) \n"
+                         + "              || CASE WHEN a.attnotnull THEN ' NOT NULL' ELSE '' END \n"
+                         + "              || CASE WHEN d.addef IS NULL THEN '' ELSE ' DEFAULT ' || d.addef END, ',' || chr(10) ORDER BY a.attnum) \n"
+                         + "       FROM pg_attribute a \n" + "       LEFT JOIN (SELECT adrelid, adnum, pg_get_expr(adbin, adrelid) AS addef FROM pg_attrdef) d \n"
+                         + "              ON d.adrelid = a.attrelid AND d.adnum = a.attnum \n" + "      WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped) \n"
+                         + "  || COALESCE((SELECT ',' || chr(10) || string_agg('  CONSTRAINT ' || quote_ident(k.conname) || ' ' \n"
+                         + "                                     || pg_get_constraintdef(k.oid), ',' || chr(10)) \n"
+                         + "                FROM pg_constraint k WHERE k.conrelid = c.oid), '') \n" + "  || chr(10) || ');' \n"
+                         + "  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \n" + " WHERE n.nspname = ? AND c.relname = ? AND c.relkind IN ('r', 'p')";
+        return singleValueScript(con, showSql, schema, table);
+    }
+
+    /**
+     * pg_get_viewdef understands materialized views as well, so the body is returned bare exactly like the existing
+     * view path does.
+     */
+    protected List<String> showCreateMaterializedView(Connection con, String schema, String materialized) throws SQLException {
+        String showSql = "SELECT pg_get_viewdef(c.oid, true) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \n"
+                         + " WHERE c.relkind = 'm' AND n.nspname = ? AND c.relname = ?";
+        return singleValueScript(con, showSql, schema, materialized);
+    }
+
+    /**
+     * pg_sequence holds the options of every sequence since PostgreSQL 10; the clauses are emitted in the order the
+     * CREATE SEQUENCE grammar expects.
+     */
+    protected List<String> showCreateSequence(Connection con, String schema, String sequence) throws SQLException {
+        String showSql = "SELECT 'CREATE SEQUENCE ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) \n"
+                         + "  || chr(10) || '    AS ' || format_type(s.seqtypid::oid, NULL) \n" + "  || chr(10) || '    INCREMENT BY ' || s.seqincrement \n"
+                         + "  || chr(10) || '    MINVALUE ' || s.seqmin \n" + "  || chr(10) || '    MAXVALUE ' || s.seqmax \n"
+                         + "  || chr(10) || '    START WITH ' || s.seqstart \n" + "  || chr(10) || '    CACHE ' || s.seqcache \n"
+                         + "  || CASE WHEN s.seqcycle THEN chr(10) || '    CYCLE' ELSE '' END || chr(10) || ';' \n" + "  FROM pg_class c \n"
+                         + "  JOIN pg_namespace n ON n.oid = c.relnamespace \n" + "  JOIN pg_sequence s ON s.seqrelid = c.oid \n"
+                         + " WHERE c.relkind = 'S' AND n.nspname = ? AND c.relname = ?";
+        return singleValueScript(con, showSql, schema, sequence);
+    }
+
+    private List<String> singleValueScript(Connection con, String showSql, String schema, String name) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement(showSql)) {
+            ps.setString(1, schema);
+            ps.setString(2, name);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Collections.singletonList(rs.getString(1));
+                } else {
+                    return Collections.emptyList();
+                }
             }
         }
     }

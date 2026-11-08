@@ -143,6 +143,9 @@ public class OraMetaService extends DefaultRdbMetaService {
                     case Trigger:
                         String showTriggerSql = "select dbms_metadata.get_ddl('TRIGGER',?,?) from dual";
                         return showCreateObject(con, showTriggerSql, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
+                    case Sequence:
+                        String showSequenceSql = "select dbms_metadata.get_ddl('SEQUENCE',?,?) from dual";
+                        return showCreateObject(con, showSequenceSql, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
                     case Synonym:
                         String showSynonymSql = "select dbms_metadata.get_ddl('SYNONYM',?,?) from dual";
                         return showCreateObject(con, showSynonymSql, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);

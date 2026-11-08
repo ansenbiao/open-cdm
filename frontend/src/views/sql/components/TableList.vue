@@ -231,6 +231,17 @@
         <a-button @click="handleCloseModal" :disabled="sqlModal.loading">{{ $t('guan-bi') }}</a-button>
       </template>
     </CCModal>
+    <CCModal :title="definitionModal.title" v-model="definitionModal.show" :mask-closable="false" :keyboard="false" :width="800">
+      <a-spin :spinning="definitionModal.loading">
+        <pre class="definition-sql">{{ definitionText }}</pre>
+      </a-spin>
+      <template #footer>
+        <a-button @click="copyText(definitionModal.sql)" type="primary" :disabled="definitionModal.loading || !definitionModal.sql">
+          {{ $t('fu-zhi-sql') }}
+        </a-button>
+        <a-button @click="definitionModal.show = false" :disabled="definitionModal.loading">{{ $t('guan-bi') }}</a-button>
+      </template>
+    </CCModal>
     <CCModal v-model="triggerModal.show" :title="triggerModal.title" :mask-closable="false" :keyboard="false" :width="800">
       <div class="trigger-modal">
         <div v-if="!triggerModal.sql">
@@ -1181,6 +1192,14 @@ const EMPTY_SQL_DATA = {
     truncateUseDelete: false
   }
 };
+const VIEWABLE_OBJECT_TYPES = ['TABLE', 'VIEW', 'MATERIALIZED', 'PROC', 'FUNC', 'TRIGGER', 'SEQUENCE', 'SYNONYM'];
+const EMPTY_DEFINITION_DATA = {
+  loading: false,
+  show: false,
+  title: '',
+  sql: '',
+  supported: true
+};
 const EMPTY_MENU_DATA = {
   actionData: {},
   show: false,
@@ -1262,6 +1281,7 @@ export default {
       triggerModal: deepClone(EMPTY_TRIGGER_DATA),
       genDataModal: deepClone(EMPTY_GEN_DATA),
       sqlModal: deepClone(EMPTY_SQL_DATA),
+      definitionModal: deepClone(EMPTY_DEFINITION_DATA),
       menuModal: deepClone(EMPTY_MENU_DATA),
       FAKER_TASK_STATUS,
       monacoEditor: null,
@@ -1480,6 +1500,15 @@ export default {
     showInitialSkeleton() {
       const currentLeaf = this.currentTab[this.currentTab.leafType];
       return this.tableListLoading && !currentLeaf?.loaded && !currentLeaf?.treeData?.length;
+    },
+    definitionText() {
+      if (this.definitionModal.loading) {
+        return '';
+      }
+      if (!this.definitionModal.supported) {
+        return this.$t('gai-shu-ju-yuan-zan-bu-zhi-chi-cha-kan-ci-lei-xing-ding-yi');
+      }
+      return this.definitionModal.sql || this.$t('zan-wu-shu-ju');
     },
     ...mapState(['globalDsSetting']),
     ...mapGetters(['isDesktop', 'getMenus', 'getBrowserMenus', 'getQuickQuery', 'getDsClassify', 'genQualifierText', 'targetDsList', 'ddlList']),
@@ -2661,19 +2690,32 @@ export default {
             }
           });
         }
+      }
 
-        if (items.length) {
-          ContextMenu.showContextMenu({
-            x: event.x,
-            y: event.y,
-            theme: 'flat',
-            items,
-            event,
-            customClass: 'sql-context-menu',
-            zIndex: 99,
-            minWidth: 176
-          });
-        }
+      // viewing a definition is read-only, keep it available even when the backend menu whitelist filters everything out.
+      if (!isNotNode && node && VIEWABLE_OBJECT_TYPES.includes(node.nodeType)) {
+        items.push({
+          label: this.$t('cha-kan-ding-yi'),
+          svgProps: {
+            class: 'svg-icon'
+          },
+          svgIcon: '#icon-svg-struct',
+          divided: items.length > 0,
+          onClick: () => this.handleRightClickMenu(TABLE_RIGHT_CLICK_MENU_ITEM.MENU_BROWSE_OBJECT_VIEW)
+        });
+      }
+
+      if (items.length) {
+        ContextMenu.showContextMenu({
+          x: event.x,
+          y: event.y,
+          theme: 'flat',
+          items,
+          event,
+          customClass: 'sql-context-menu',
+          zIndex: 99,
+          minWidth: 176
+        });
       }
     },
     clearLogInterVal() {
@@ -2778,6 +2820,7 @@ export default {
     async handleCloseModal() {
       this.genDataModal = deepClone(EMPTY_GEN_DATA);
       this.sqlModal = deepClone(EMPTY_SQL_DATA);
+      this.definitionModal = deepClone(EMPTY_DEFINITION_DATA);
       this.menuModal = deepClone(EMPTY_MENU_DATA);
 
       this.triggerModal = deepClone(EMPTY_TRIGGER_DATA);
@@ -2863,6 +2906,33 @@ export default {
         this.handleStruct();
       }
     },
+    async handleViewDefinition(tableNode) {
+      const targetName = tableNode.objAttr && tableNode.objAttr.rdb_roi ? tableNode.objName : tableNode.title;
+      this.definitionModal.title = this.$t('cha-kan-ding-yi-tabletitle', [targetName]);
+      this.definitionModal.sql = '';
+      this.definitionModal.supported = true;
+      this.definitionModal.show = true;
+      this.definitionModal.loading = true;
+      try {
+        const res = await this.$services.dmBrowseActionsDefinition({
+          data: {
+            levels: this.browseGenLevelsData(this.currentTab.node),
+            targetType: tableNode.nodeType,
+            targetName
+          }
+        });
+        if (res.success) {
+          // A dialect that cannot describe the type answers the request instead of failing it, so the hint belongs
+          // into the body of the dialog rather than into an error toast.
+          this.definitionModal.supported = res.data.supported !== false;
+          this.definitionModal.sql = this.definitionModal.supported ? res.data.sql || '' : '';
+        }
+      } catch (e) {
+        appLogger.error(e);
+      } finally {
+        this.definitionModal.loading = false;
+      }
+    },
     async handleRightClickMenu(actionType) {
       const tableNode = this.$refs.tableTree.getSelectedNode();
       appLogger.debug(actionType, tableNode);
@@ -2888,6 +2958,11 @@ export default {
       let res = {};
 
       switch (actionType) {
+        case TABLE_RIGHT_CLICK_MENU_ITEM.MENU_BROWSE_OBJECT_VIEW:
+          if (tableNode) {
+            await this.handleViewDefinition(tableNode);
+          }
+          break;
         case TABLE_RIGHT_CLICK_MENU_ITEM.MENU_BROWSE_PROPERTY:
           appLogger.debug(this.selectedNode);
           res = await this.$services.dmEditorPropertiesPropertiesDef({
@@ -3946,6 +4021,21 @@ export default {
 };
 </script>
 <style scoped lang="less">
+.definition-sql {
+  margin: 0;
+  padding: 8px 12px;
+  max-height: 500px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 21px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
 .object-count-skeleton {
   display: block;
   width: 48px;

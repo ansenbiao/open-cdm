@@ -50,8 +50,16 @@ public class GsMetaService extends PgMetaService {
     @Override
     protected SqlBuilder getSqlBuilder() { return PgEditorProvider.INSTANCE; }
 
+    /**
+     * GaussDB is a PostgreSQL fork, so tables and materialized views are recomposed by the PostgreSQL implementation.
+     * Sequences are deliberately not reused: their options live in pg_sequence there, and openGauss does not provide
+     * that catalog.
+     */
     @Override
     public List<String> requestObjectScript(Map<UmiTypes, Object> levelsParam, UmiTypes leafType, String leafName) {
+        if (leafType == UmiTypes.Table || leafType == UmiTypes.Materialized) {
+            return super.requestObjectScript(levelsParam, leafType, leafName);
+        }
         try {
             return this.rdbSession.executeQuery(con -> {
                 switch (leafType) {
@@ -62,7 +70,7 @@ public class GsMetaService extends PgMetaService {
                         return showCreateFunction(con, StringUtils.toString(levelsParam.get(UmiTypes.Catalog)), StringUtils
                             .toString(levelsParam.get(UmiTypes.Schema)), leafName, leafType);
                     default:
-                        throw new UnsupportedOperationException("MSSQL '" + leafType + "' Unsupported.");
+                        throw new UnsupportedOperationException("GaussDB '" + leafType + "' Unsupported.");
                 }
             });
         } catch (Exception e) {

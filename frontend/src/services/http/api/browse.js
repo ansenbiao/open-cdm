@@ -9,6 +9,7 @@ export const browseApi = {
   dmBrowseActionsInstanceRemark: '/api/entry/browse/actions/instanceRemark',
   dmBrowseActionsInstanceDelete: '/api/entry/browse/actions/instanceDelete',
   dmBrowseActionsRequestScript: '/api/entry/browse/actions/requestScript',
+  dmBrowseActionsDefinition: '/api/entry/browse/actions/definition',
   dmBrowseActionsGenerateScript: '/api/entry/browse/actions/generateScript',
   dmBrowseActionsLoadObject: '/api/entry/browse/actions/loadObject',
   dmBrowseActionsFetchParamOptions: '/api/entry/browse/actions/fetchParamOptions',

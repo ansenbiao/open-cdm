@@ -40,11 +40,13 @@ import com.clougence.clouddm.console.web.global.jwtsession.RequestAuth;
 import com.clougence.clouddm.console.web.model.fo.browse.*;
 import com.clougence.clouddm.console.web.model.fo.object.ObjectEditorDefFO;
 import com.clougence.clouddm.console.web.model.vo.browse.BrowseGenSqlVO;
+import com.clougence.clouddm.console.web.model.vo.browse.BrowseObjectDefinitionVO;
 import com.clougence.clouddm.console.web.model.vo.editor.table.TableEditorFieldForm;
 import com.clougence.clouddm.console.web.service.auth.RdpUserService;
 import com.clougence.clouddm.console.web.service.browse.ActionService;
 import com.clougence.clouddm.console.web.service.browse.model.ActionTargetMO;
 import com.clougence.clouddm.console.web.util.DmConvertUtils;
+import com.clougence.clouddm.console.web.util.DmObjectDefinitionUtils;
 import com.clougence.clouddm.console.web.util.DsResPathObj;
 import com.clougence.clouddm.console.web.util.RdpAuthUtils;
 import com.clougence.clouddm.platform.dal.access.ObjectCacheDao;
@@ -156,6 +158,35 @@ public class ActionController {
 
         BrowseGenSqlVO vo = new BrowseGenSqlVO();
         vo.setSql(script);
+        return ResWebDataUtils.buildSuccess(vo);
+    }
+
+    /**
+     * object definition is read-only information, every account that can reach the data source may read it,
+     * therefore no data auth label is required here.
+     */
+    @RequestAuth(DM_QUERY_CONSOLE)
+    @RequestMapping(value = "/definition", method = RequestMethod.POST)
+    public ResWebData<?> definition(@Valid @RequestBody BrowseRequestFO fo, HttpServletRequest request) {
+        String puid = (String) request.getAttribute(RdpUserService.PUID);
+        String uid = (String) request.getAttribute(RdpUserService.UID);
+
+        DsLevels levels = this.checkOwnDataSourceAndReturnDsLevels(puid, fo.getLevels());
+        ActionTargetMO mo = DmConvertUtils.convertToActionTargetMO(fo);
+
+        BrowseObjectDefinitionVO vo = new BrowseObjectDefinitionVO();
+        try {
+            vo.setSql(this.actionService.requestObjectScript(uid, levels, mo));
+        } catch (Exception e) {
+            // Not every dialect is able to describe every object type, and the object tree of a data source is not
+            // filtered by that ability. A dialect saying that it cannot read a type is an answer, not a failure, so
+            // it is reported as such and the page explains it in place instead of raising an error.
+            if (!DmObjectDefinitionUtils.isUnsupportedType(e)) {
+                throw e;
+            }
+            log.info("definition unsupported for ds[{}] target[{} {}]: {}", levels.dsDO().getId(), fo.getTargetType(), fo.getTargetName(), e.getMessage());
+            vo.setSupported(false);
+        }
         return ResWebDataUtils.buildSuccess(vo);
     }
 

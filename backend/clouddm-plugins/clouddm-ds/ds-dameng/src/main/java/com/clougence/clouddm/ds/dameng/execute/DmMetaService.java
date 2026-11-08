@@ -100,10 +100,24 @@ public class DmMetaService extends DefaultRdbMetaService {
     public List<String> requestObjectScript(Map<UmiTypes, Object> levelsParam, UmiTypes leafType, String leafName) {
         try {
             return this.rdbSession.executeQuery(con -> {
+                String schema = StringUtils.toString(levelsParam.get(UmiTypes.Schema));
                 switch (leafType) {
                     case Table:
-                        String showTableSql = "select dbms_metadata.get_ddl('TABLE',?,?) from dual";
-                        return showCreateObject(con, showTableSql, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
+                        return requestDdl(con, "TABLE", schema, leafName);
+                    case View:
+                        return requestViewScript(con, schema, leafName);
+                    case Materialized:
+                        return requestMaterializedScript(con, schema, leafName);
+                    case Procedure:
+                        return requestDdl(con, "PROCEDURE", schema, leafName);
+                    case Function:
+                        return requestDdl(con, "FUNCTION", schema, leafName);
+                    case Trigger:
+                        return requestDdl(con, "TRIGGER", schema, leafName);
+                    case Sequence:
+                        return requestDdl(con, "SEQUENCE", schema, leafName);
+                    case Synonym:
+                        return requestDdl(con, "SYNONYM", schema, leafName);
                     default:
                         throw new UnsupportedOperationException("Dameng '" + leafType + "' Unsupported.");
                 }
@@ -112,6 +126,50 @@ public class DmMetaService extends DefaultRdbMetaService {
             String msg = "requestObjectScript error.msg:" + ExceptionUtils.getRootCauseMessage(e);
             log.error(msg, e);
             throw new RuntimeException(msg, e);
+        }
+    }
+
+    private List<String> requestDdl(Connection con, String objectType, String schema, String objectName) throws SQLException {
+        try {
+            List<String> ddl = showCreateObject(con, "select dbms_metadata.get_ddl('" + objectType + "',?,?) from dual", schema, objectName);
+            if (!ddl.isEmpty() && StringUtils.isNotBlank(ddl.get(0))) {
+                return ddl;
+            }
+        } catch (SQLException e) {
+            // not every Dameng edition ships all object types in dbms_metadata, the caller decides how to fall back.
+            log.debug("dbms_metadata.get_ddl('{}') failed, msg: {}", objectType, ExceptionUtils.getRootCauseMessage(e));
+        }
+        return Collections.emptyList();
+    }
+
+    private List<String> requestViewScript(Connection con, String schema, String viewName) throws SQLException {
+        List<String> ddl = requestDdl(con, "VIEW", schema, viewName);
+        if (!ddl.isEmpty()) {
+            return ddl;
+        }
+        // SYS.ALL_VIEWS.TEXT only holds the query body, build a readable definition from it.
+        String querySql = requestViewQuerySql(con, schema, viewName);
+        if (StringUtils.isBlank(querySql)) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList("CREATE VIEW \"" + schema + "\".\"" + viewName + "\" AS\n" + querySql);
+    }
+
+    private List<String> requestMaterializedScript(Connection con, String schema, String viewName) throws SQLException {
+        List<String> ddl = requestDdl(con, "MATERIALIZED VIEW", schema, viewName);
+        if (!ddl.isEmpty()) {
+            return ddl;
+        }
+        return requestViewScript(con, schema, viewName);
+    }
+
+    private String requestViewQuerySql(Connection con, String schema, String viewName) throws SQLException {
+        try (PreparedStatement ps = con.prepareStatement("select TEXT from SYS.ALL_VIEWS where OWNER = ? and VIEW_NAME = ?")) {
+            ps.setString(1, schema);
+            ps.setString(2, viewName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getString(1) : null;
+            }
         }
     }
 

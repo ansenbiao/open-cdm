@@ -24,7 +24,11 @@ import com.clougence.clouddm.dsfamily.db2.definition.ui.editor.table.Db2EditorPr
 import com.clougence.clouddm.sdk.execute.session.Session;
 import com.clougence.clouddm.sdk.execute.session.rdb.DefaultRdbMetaService;
 import com.clougence.clouddm.sdk.sql.SqlParserParameters;
+import com.clougence.schema.editor.EditorHelperDm;
+import com.clougence.schema.editor.domain.ETable;
 import com.clougence.schema.editor.provider.SqlBuilder;
+import com.clougence.schema.editor.triggers.TriggerContext;
+import com.clougence.schema.umi.service.RdbUmiServiceDm;
 import com.clougence.schema.umi.struts.UmiTypes;
 import com.clougence.sql.db2.parser.Db2Version;
 import com.clougence.utils.ExceptionUtils;
@@ -102,27 +106,36 @@ public abstract class Db2MetaService extends DefaultRdbMetaService {
 
     @Override
     public List<String> requestObjectScript(Map<UmiTypes, Object> levelsParam, UmiTypes leafType, String leafName) {
-        //https://blog.csdn.net/qq_40028149/article/details/118577981
-        //        --2 parameters, first input parameter... -t mode: table name
-        //                --2 arguments, 1st input parameter... -v mode: view name
-        //                --2 arguments, 2nd ? is an output parameter
-        //
-        //        CALL SYSPROC.DB2LK_GENERATE_DDL('-e -x -td ;  -t S1.T1',?)
-        //        CALL SYSPROC.DB2LK_GENERATE_DDL('-e -x -td ;  -v  S1.V1',?)
         try {
             return this.rdbSession.executeQuery(con -> {
+                String schema = StringUtils.toString(levelsParam.get(UmiTypes.Schema));
                 switch (leafType) {
+                    case Table:
+                        return requestTableScript(con, StringUtils.toString(levelsParam.get(UmiTypes.Catalog)), schema, leafName);
+                    case View:
+                    case Materialized:
+                        // SYSCAT.VIEWS keeps the defining query of both views and materialized query tables
+                        String showViewSql = "SELECT TEXT FROM SYSCAT.VIEWS WHERE VIEWSCHEMA = ? AND VIEWNAME = ? ";
+                        return showCreateObject(con, showViewSql, schema, leafName);
+                    case Sequence:
+                        String showSequenceSql = "SELECT 'CREATE SEQUENCE ' || SEQSCHEMA || '.' || SEQNAME \n" + "  || ' START WITH ' || CHAR(START) \n"
+                                                 + "  || ' INCREMENT BY ' || CHAR(INCREMENT) \n"
+                                                 + "  || CASE WHEN MINVALUE IS NULL THEN ' NO MINVALUE' ELSE ' MINVALUE ' || CHAR(MINVALUE) END \n"
+                                                 + "  || CASE WHEN MAXVALUE IS NULL THEN ' NO MAXVALUE' ELSE ' MAXVALUE ' || CHAR(MAXVALUE) END \n"
+                                                 + "  || CASE WHEN CYCLE = 'Y' THEN ' CYCLE' ELSE ' NO CYCLE' END \n"
+                                                 + "FROM SYSCAT.SEQUENCES WHERE SEQTYPE = 'S' AND SEQSCHEMA = ? AND SEQNAME = ? ";
+                        return showCreateObject(con, showSequenceSql, schema, leafName);
                     case Procedure:
                         String showProcedureSql = "SELECT TEXT FROM SYSCAT.ROUTINES WHERE ROUTINETYPE = 'P' AND ROUTINESCHEMA = ? AND SPECIFICNAME = ? ";
-                        return showCreateObject(con, showProcedureSql, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
+                        return showCreateObject(con, showProcedureSql, schema, leafName);
                     case Function:
                         String showFunctionSql = "SELECT TEXT FROM SYSCAT.ROUTINES WHERE ROUTINETYPE = 'F' AND ROUTINESCHEMA = ? AND SPECIFICNAME = ? ";
-                        return showCreateObject(con, showFunctionSql, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
+                        return showCreateObject(con, showFunctionSql, schema, leafName);
                     case Trigger:
                         String showTriggerSql = "SELECT TEXT FROM SYSCAT.TRIGGERS WHERE TRIGSCHEMA = ? AND TRIGNAME = ? ";
-                        return showCreateObject(con, showTriggerSql, StringUtils.toString(levelsParam.get(UmiTypes.Schema)), leafName);
+                        return showCreateObject(con, showTriggerSql, schema, leafName);
                     default:
-                        throw new UnsupportedOperationException("Oracle '" + leafType + "' Unsupported.");
+                        throw new UnsupportedOperationException("DB2 '" + leafType + "' Unsupported.");
                 }
             });
         } catch (Exception e) {
@@ -145,5 +158,22 @@ public abstract class Db2MetaService extends DefaultRdbMetaService {
                 }
             }
         }
+    }
+
+    /**
+     * Db2 has no SHOW CREATE TABLE, and the LUW helper SYSPROC.DB2LK_GENERATE_DDL is absent on both platforms this
+     * family serves (Db2 for z/OS and Db2 for i), so the statement is recomposed with the same metadata reader the
+     * table editor uses. Whatever the tree is able to list, this is able to print back.
+     */
+    private List<String> requestTableScript(Connection con, String catalog, String schema, String table) throws Exception {
+        RdbUmiServiceDm umiService = rdbUmiService(con);
+        EditorHelperDm editorHelper = new EditorHelperDm(umiService, this.getSqlBuilder());
+        ETable eTable = editorHelper.loadTable(catalog, schema, table);
+        if (eTable == null) {
+            return Collections.emptyList();
+        }
+        TriggerContext buildContext = new TriggerContext();
+        buildContext.setUseDelimited(true);
+        return this.getSqlBuilder().tableCreate(buildContext, catalog, schema, table, eTable);
     }
 }

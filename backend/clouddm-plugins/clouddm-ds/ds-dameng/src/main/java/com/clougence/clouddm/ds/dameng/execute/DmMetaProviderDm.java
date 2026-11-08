@@ -103,8 +103,40 @@ public class DmMetaProviderDm extends AbstractMetadataProvider implements MetaDa
                                                + "              A.ID = B.ID  AND A.COLID = C.COLID  AND A.ID = C.ID \n" //
                                                + "           ) VIRT_TAB ON VIRT_TAB.COL_NAME = COMM.COLUMN_NAME AND VIRT_TAB.TAB_NAME = COLS.TABLE_NAME ";
 
+    /**
+     * Column metadata for accounts that cannot read {@code SYS.DBA_TAB_COLS}. The ALL_ dictionary lists the same columns for
+     * every table the account can reach, but without the SYSCOLUMNS joins it cannot report identity/virtual columns, so both
+     * flags are reported as {@code false}.
+     */
+    private static final String COLUMNS_ALL  = "SELECT COLS.OWNER, COLS.TABLE_NAME, COLS.COLUMN_NAME, DATA_TYPE, DATA_TYPE_OWNER, COLUMN_ID, DATA_LENGTH, CHAR_LENGTH, DATA_PRECISION, DATA_SCALE, NULLABLE, CHARACTER_SET_NAME, 'NO' HIDDEN_COLUMN, FALSE IS_IDENT, NULL IDENT, FALSE IS_VIRT, COMM.COMMENTS, DATA_DEFAULT\n"
+                                               + "FROM SYS.ALL_TAB_COLUMNS COLS\n" //
+                                               + "LEFT JOIN SYS.ALL_COL_COMMENTS COMM ON COLS.OWNER = COMM.OWNER AND COLS.TABLE_NAME = COMM.TABLE_NAME AND COLS.COLUMN_NAME = COMM.COLUMN_NAME\n";
+
+    /** Null until resolved, then {@code true} when the account may read the DBA_* dictionary views. */
+    private Boolean             dbaDictionary;
+
     public DmMetaProviderDm(Connection connection){
         super(connection);
+    }
+
+    /**
+     * DM keeps the Oracle style dictionary twice: {@code DBA_*} holds every object but is readable only by accounts holding
+     * the DBA role (or an explicit grant), {@code ALL_*} holds the objects the account can access. A DQL-only account is
+     * rejected at prepare time with "no privilege on SYS.DBA_TAB_COLS", so the flavour is resolved once per provider and
+     * then reused by every dictionary read.
+     */
+    private boolean useDbaDictionary() {
+        if (this.dbaDictionary == null) {
+            try (Connection conn = this.connectSupplier.eGet(); PreparedStatement ps = conn.prepareStatement("select 1 from SYS.DBA_TAB_COLS where 1 = 0")) {
+                try (ResultSet rs = ps.executeQuery()) {
+                    this.dbaDictionary = Boolean.TRUE;
+                }
+            } catch (SQLException e) {
+                this.dbaDictionary = Boolean.FALSE;
+                log.debug("SYS.DBA_TAB_COLS is not readable, metadata falls back to the ALL_ dictionary: {}", e.getMessage());
+            }
+        }
+        return this.dbaDictionary;
     }
 
     @Override
@@ -212,11 +244,13 @@ public class DmMetaProviderDm extends AbstractMetadataProvider implements MetaDa
     }
 
     public List<Value> selectTrigger(String schema) throws SQLException {
+        // DBA_TRIGGERS needs the DBA role, ALL_TRIGGERS lists the same triggers for the objects the account can reach.
+        String triggers = useDbaDictionary() ? "DBA_TRIGGERS" : "ALL_TRIGGERS";
         return execute(needUserParams -> {
             if (needUserParams) {
-                return "SELECT TRIGGER_NAME as OBJECT_NAME FROM DBA_TRIGGERS where OWNER = ? order by OBJECT_NAME asc";
+                return "SELECT TRIGGER_NAME as OBJECT_NAME FROM " + triggers + " where OWNER = ? order by OBJECT_NAME asc";
             } else {
-                return "SELECT TRIGGER_NAME as OBJECT_NAME FROM DBA_TRIGGERS where OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " order by OBJECT_NAME asc";
+                return "SELECT TRIGGER_NAME as OBJECT_NAME FROM " + triggers + " where OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " order by OBJECT_NAME asc";
             }
         }, (rs) -> {
             List<Value> schemas = DmMetaProviderUtils.convertTriggerName(rs);
@@ -225,11 +259,13 @@ public class DmMetaProviderDm extends AbstractMetadataProvider implements MetaDa
     }
 
     public List<Value> selectSequences(String schema) throws SQLException {
+        // dba_sequences needs the DBA role, all_sequences lists the same sequences for the objects the account can reach.
+        String sequences = useDbaDictionary() ? "dba_sequences" : "all_sequences";
         return execute(needUserParams -> {
             if (needUserParams) {
-                return "select SEQUENCE_NAME as OBJECT_NAME from dba_sequences where SEQUENCE_OWNER = ? order by OBJECT_NAME asc ";
+                return "select SEQUENCE_NAME as OBJECT_NAME from " + sequences + " where SEQUENCE_OWNER = ? order by OBJECT_NAME asc ";
             } else {
-                return "select SEQUENCE_NAME as OBJECT_NAME from dba_sequences where SEQUENCE_OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " order by OBJECT_NAME asc ";
+                return "select SEQUENCE_NAME as OBJECT_NAME from " + sequences + " where SEQUENCE_OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " order by OBJECT_NAME asc ";
             }
         }, (rs) -> {
             List<Value> schemas = DmMetaProviderUtils.convertSequenceName(rs);
@@ -334,34 +370,15 @@ public class DmMetaProviderDm extends AbstractMetadataProvider implements MetaDa
 
     @Override
     protected Map<String, List<RdbColumn>> fetchViewColumns(Connection conn, String catalog, String schema, List<String> tabs) throws SQLException {
-        String tabHolders = buildWhereIn(tabs);
-        List<String> params = new ArrayList<>();
-        params.add(schema);
-        params.addAll(tabs);
-
-        return execute(needUserParams -> {
-            if (needUserParams) {
-                return VIEW_COLUMNS.replace("###TABLE_NAME###", tabHolders) + " where COLS.OWNER = ? and COLS.TABLE_NAME in " + buildWhereIn(tabs) + " order by COLUMN_ID asc";
-            } else {
-                return VIEW_COLUMNS.replace("###TABLE_NAME###", tabHolders) + " where COLS.OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " and COLS.TABLE_NAME in "
-                       + buildWhereString(tabs) + " order by COLUMN_ID asc";
-            }
-        }, (rs) -> {
-            List<RdbColumn> cols = DmMetaProviderUtils.convertColumn(rs);
-            if (CollectionUtils.isEmpty(cols)) {
-                return Collections.emptyMap();
-            }
-
-            Map<String, List<RdbColumn>> result = new LinkedHashMap<>();
-            for (RdbColumn column : cols) {
-                result.computeIfAbsent(column.getTable(), s -> new ArrayList<>()).add(column);
-            }
-            return result;
-        }, params, true, true);
+        return fetchColumns(useDbaDictionary() ? VIEW_COLUMNS : COLUMNS_ALL, schema, tabs);
     }
 
     @Override
     protected Map<String, List<RdbColumn>> fetchTableColumns(Connection conn, String catalog, String schema, List<String> tabs) throws SQLException {
+        return fetchColumns(useDbaDictionary() ? COLUMNS : COLUMNS_ALL, schema, tabs);
+    }
+
+    private Map<String, List<RdbColumn>> fetchColumns(String query, String schema, List<String> tabs) throws SQLException {
         String tabHolders = buildWhereIn(tabs);
 
         ArrayList<String> params = new ArrayList<>();
@@ -369,10 +386,9 @@ public class DmMetaProviderDm extends AbstractMetadataProvider implements MetaDa
         params.addAll(tabs);
         return execute(needUserParams -> {
             if (needUserParams) {
-                return COLUMNS.replace("###TABLE_NAME###", tabHolders) + " where COLS.OWNER = ? and COLS.TABLE_NAME in " + tabHolders + " order by COLUMN_ID asc";
+                return query + " where COLS.OWNER = ? and COLS.TABLE_NAME in " + tabHolders + " order by COLUMN_ID asc";
             } else {
-                return COLUMNS.replace("###TABLE_NAME###", tabHolders) + " where COLS.OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " and COLS.TABLE_NAME in "
-                       + buildWhereString(tabs) + " order by COLUMN_ID asc";
+                return query + " where COLS.OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " and COLS.TABLE_NAME in " + buildWhereString(tabs) + " order by COLUMN_ID asc";
             }
         }, (rs) -> {
             List<RdbColumn> cols = DmMetaProviderUtils.convertColumn(rs);
@@ -390,17 +406,20 @@ public class DmMetaProviderDm extends AbstractMetadataProvider implements MetaDa
 
     @Override
     protected Map<String, List<ConstraintObject>> fetchTableConstraints(Connection conn, String catalog, String schema, List<String> tabs) throws SQLException {
+        // DBA_CONSTRAINTS needs the DBA role, ALL_CONSTRAINTS holds the same rows for the objects the account can reach.
+        String constraints = useDbaDictionary() ? "DBA_CONSTRAINTS" : "ALL_CONSTRAINTS";
         List<String> params = new ArrayList<>();
         params.add(schema);
         params.addAll(tabs);
         return execute(needUserParams -> {
             if (needUserParams) {
                 return "SELECT  a.STATUS STATUS, a.CONSTRAINT_NAME CONSTRAINT_NAME,a.CONSTRAINT_TYPE CONSTRAINT_TYPE,a.TABLE_NAME TABLE_NAME,a.SEARCH_CONDITION SEARCH_CONDITION,a.R_OWNER R_OWNER,a.DELETE_RULE DELETE_RULE,b.COLUMN_NAME COLUMN_NAME"
-                       + " FROM    DBA_CONSTRAINTS a left JOIN     ALL_CONS_COLUMNS b  ON    a.CONSTRAINT_NAME = b.CONSTRAINT_NAME  " + " where a.OWNER = ? and a.TABLE_NAME in"
+                       + " FROM    " + constraints + " a left JOIN     ALL_CONS_COLUMNS b  ON    a.CONSTRAINT_NAME = b.CONSTRAINT_NAME  " + " where a.OWNER = ? and a.TABLE_NAME in"
                        + buildWhereIn(tabs) + " and CONSTRAINT_TYPE in ('C','U')";
             } else {
-                return "SELECT a.STATUS STATUS, a.CONSTRAINT_NAME CONSTRAINT_NAME,a.CONSTRAINT_TYPE CONSTRAINT_TYPE,a.TABLE_NAME TABLE_NAME,a.SEARCH_CONDITION SEARCH_CONDITION,a.R_OWNER R_OWNER,a.DELETE_RULE DELETE_RULE,b.COLUMN_NAME COLUMN_NAME FROM    DBA_CONSTRAINTS a left JOIN     ALL_CONS_COLUMNS b  ON    a.CONSTRAINT_NAME = b.CONSTRAINT_NAME  "
-                       + " where a.OWNER = " + DmDialect.INSTANCE.fmtValue(schema) + " and a.TABLE_NAME in" + buildWhereString(tabs) + " and CONSTRAINT_TYPE in ('C','U')";
+                return "SELECT a.STATUS STATUS, a.CONSTRAINT_NAME CONSTRAINT_NAME,a.CONSTRAINT_TYPE CONSTRAINT_TYPE,a.TABLE_NAME TABLE_NAME,a.SEARCH_CONDITION SEARCH_CONDITION,a.R_OWNER R_OWNER,a.DELETE_RULE DELETE_RULE,b.COLUMN_NAME COLUMN_NAME FROM    "
+                       + constraints + " a left JOIN     ALL_CONS_COLUMNS b  ON    a.CONSTRAINT_NAME = b.CONSTRAINT_NAME  " + " where a.OWNER = "
+                       + DmDialect.INSTANCE.fmtValue(schema) + " and a.TABLE_NAME in" + buildWhereString(tabs) + " and CONSTRAINT_TYPE in ('C','U')";
             }
         }, (rs) -> {
             // sometime prepare handle sql execute will fail
